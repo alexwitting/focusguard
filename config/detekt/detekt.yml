@@ -1,0 +1,57 @@
+build:
+  maxIssues: 0
+
+config:
+  validation: true
+  warningsAsErrors: false
+
+comments:
+  UndocumentedPublicClass:
+    active: false
+  UndocumentedPublicFunction:
+    active: false
+  UndocumentedPublicProperty:
+    active: false
+
+complexity:
+  # @Composable functions routinely lay out an entire screen in one function — that's the
+  # idiomatic style (see feature/*/…Screen.kt), not a smell, so they're exempted here.
+  LongMethod:
+    threshold: 60
+    ignoreAnnotated: ['Composable']
+  LongParameterList:
+    functionThreshold: 7
+    constructorThreshold: 8
+    ignoreAnnotated: ['Composable', 'Inject'] # Hilt constructor injection: one param per use case
+  TooManyFunctions:
+    thresholdInFiles: 20
+    thresholdInClasses: 20
+  CyclomaticComplexMethod:
+    threshold: 20
+    ignoreAnnotated: ['Composable']
+
+style:
+  MagicNumber:
+    active: false
+  MaxLineLength:
+    active: false # delegated to ktlint, which reads .editorconfig
+  ReturnCount:
+    max: 6 # early-return guard clauses are idiomatic Kotlin
+  WildcardImport:
+    active: true
+    excludeImports: []
+  # @Preview composables are only ever called by Android Studio's preview renderer, never from
+  # other code — detekt has no way to see that, so without this it flags every one as unused.
+  UnusedPrivateMember:
+    ignoreAnnotated: ['Preview']
+
+naming:
+  active: true
+  FunctionNaming:
+    ignoreAnnotated: ['Composable']
+  TopLevelPropertyNaming:
+    constantPattern: '[A-Za-z][A-Za-z0-9]*|[A-Z][_A-Z0-9]*'
+
+exceptions:
+  TooGenericExceptionCaught:
+    active: false

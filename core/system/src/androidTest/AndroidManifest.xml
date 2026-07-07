@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- Fully-qualified, not ".service.AccessibilityProbeActivity": relative names in an
+             androidTest manifest resolve against the *test* namespace (applicationId + ".test"),
+             not this module's own "com.focusguard.core.system" namespace — a relative name here
+             merges to the wrong component and the OS fails to resolve it at launch time. -->
+        <activity
+            android:name="com.focusguard.core.system.service.AccessibilityProbeActivity"
+            android:exported="false" />
+    </application>
+
+</manifest>

@@ -1,0 +1,241 @@
+package com.focusguard.feature.onboarding
+
+import app.cash.turbine.test
+import com.focusguard.core.domain.model.PermissionsHealth
+import com.focusguard.core.domain.repository.SystemHealthRepository
+import com.focusguard.core.testing.FakeSettingsRepository
+import com.focusguard.core.testing.FakeSystemHealthRepository
+import com.focusguard.core.testing.MainDispatcherExtension
+import io.mockk.coEvery
+import io.mockk.every
+import io.mockk.mockk
+import io.mockk.mockkStatic
+import io.mockk.unmockkStatic
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.runTest
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.extension.RegisterExtension
+
+class OnboardingViewModelTest {
+    @JvmField
+    @RegisterExtension
+    val mainDispatcherExtension = MainDispatcherExtension()
+
+    private val systemHealthRepository = FakeSystemHealthRepository()
+    private val settingsRepository = FakeSettingsRepository()
+
+    private fun createViewModel(): OnboardingViewModel = OnboardingViewModel(systemHealthRepository, settingsRepository)
+
+    @BeforeEach
+    fun setUp() {
+        // Log.e isn't mocked under a plain JVM unit test (no Robolectric here) — only needed by
+        // the forceRefresh-failure test below, but harmless to always stub.
+        mockkStatic(android.util.Log::class)
+        every { android.util.Log.e(any(), any(), any()) } returns 0
+    }
+
+    @AfterEach
+    fun tearDown() {
+        unmockkStatic(android.util.Log::class)
+    }
+
+    /**
+     * forceRefresh launches on Dispatchers.IO explicitly, which MainDispatcherExtension doesn't
+     * touch (it only swaps Dispatchers.Main) — same real-background-thread situation as
+     * SettingsViewModelTest's forceRefresh tests, so this polls with a bounded real-time timeout
+     * instead of asserting immediately.
+     */
+    private fun awaitCondition(condition: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + 2_000
+        var result = condition()
+        while (!result && System.currentTimeMillis() < deadline) {
+            Thread.sleep(20)
+            result = condition()
+        }
+        assertTrue(result, "condition not met within timeout")
+    }
+
+    @Test
+    fun `forceRefresh updates health from a fresh check`() =
+        runTest {
+            val viewModel = createViewModel()
+            systemHealthRepository.setPermissionsHealth(
+                PermissionsHealth(
+                    accessibilityEnabled = true,
+                    vpnPrepared = true,
+                    usageStatsGranted = true,
+                    batteryOptimizationIgnored = true,
+                    exactAlarmAllowed = true,
+                ),
+            )
+
+            viewModel.forceRefresh()
+
+            awaitCondition { viewModel.state.value.health.accessibilityEnabled }
+        }
+
+    @Test
+    fun `forceRefresh failure is caught and logged instead of crashing`() =
+        runTest {
+            val failingRepository =
+                mockk<SystemHealthRepository> {
+                    every { observePermissionsHealth() } returns systemHealthRepository.observePermissionsHealth()
+                    coEvery { checkPermissionsNow() } throws IllegalStateException("boom")
+                }
+            val viewModel = OnboardingViewModel(failingRepository, settingsRepository)
+
+            viewModel.forceRefresh()
+
+            // No crash by the time forceRefresh's background coroutine would have completed —
+            // state simply stays at its last-known value, matching this ViewModel's default.
+            Thread.sleep(100)
+            assertFalse(viewModel.state.value.health.accessibilityEnabled)
+        }
+
+    @Test
+    fun `onNext advances through the step sequence`() =
+        runTest {
+            val viewModel = createViewModel()
+            assertEquals(OnboardingStep.WELCOME, viewModel.state.value.step)
+
+            viewModel.onNext()
+            assertEquals(OnboardingStep.ACCESSIBILITY, viewModel.state.value.step)
+
+            viewModel.onNext()
+            assertEquals(OnboardingStep.USAGE_ACCESS, viewModel.state.value.step)
+        }
+
+    @Test
+    fun `completing the final step marks onboarding complete and emits NavigateToMain`() =
+        runTest {
+            val viewModel = createViewModel()
+            // The VPN -> EXACT_ALARM transition is gated on Build.VERSION.SDK_INT, which reads
+            // as 0 under a plain JVM unit test — loop to DONE instead of assuming a fixed step
+            // count so this test doesn't depend on that OS-stub quirk.
+            while (viewModel.state.value.step != OnboardingStep.DONE) {
+                viewModel.onNext()
+            }
+
+            viewModel.effects.test {
+                viewModel.onNext()
+                assertEquals(OnboardingEffect.NavigateToMain, awaitItem())
+            }
+            assertTrue(settingsRepository.isOnboardingComplete().first())
+        }
+
+    @Test
+    fun `isCurrentStepGranted reflects the current step's permission`() =
+        runTest {
+            systemHealthRepository.setPermissionsHealth(
+                PermissionsHealth(
+                    accessibilityEnabled = true,
+                    vpnPrepared = false,
+                    usageStatsGranted = false,
+                    batteryOptimizationIgnored = false,
+                    exactAlarmAllowed = false,
+                ),
+            )
+            val viewModel = createViewModel()
+            viewModel.onNext() // WELCOME -> ACCESSIBILITY
+
+            assertTrue(viewModel.isCurrentStepGranted())
+        }
+
+    @Test
+    fun `isCurrentStepGranted is true at WELCOME and DONE regardless of permissions`() =
+        runTest {
+            val viewModel = createViewModel()
+
+            assertTrue(viewModel.isCurrentStepGranted()) // WELCOME
+
+            while (viewModel.state.value.step != OnboardingStep.DONE) viewModel.onNext()
+            assertTrue(viewModel.isCurrentStepGranted()) // DONE
+        }
+
+    @Test
+    fun `isCurrentStepGranted checks the matching permission at every step`() =
+        runTest {
+            systemHealthRepository.setPermissionsHealth(
+                PermissionsHealth(
+                    accessibilityEnabled = false,
+                    vpnPrepared = false,
+                    usageStatsGranted = true,
+                    batteryOptimizationIgnored = false,
+                    exactAlarmAllowed = false,
+                ),
+            )
+            val viewModel = createViewModel()
+            viewModel.onNext() // -> ACCESSIBILITY
+            viewModel.onNext() // -> USAGE_ACCESS
+
+            assertTrue(viewModel.isCurrentStepGranted())
+
+            viewModel.onNext() // -> BATTERY
+            assertFalse(viewModel.isCurrentStepGranted())
+        }
+
+    @Test
+    fun `onGrant sends the matching effect and records the step as attempted`() =
+        runTest {
+            val viewModel = createViewModel()
+            viewModel.onNext() // -> ACCESSIBILITY
+
+            viewModel.effects.test {
+                viewModel.onGrant()
+                assertEquals(OnboardingEffect.OpenAccessibilitySettings, awaitItem())
+            }
+            assertTrue(OnboardingStep.ACCESSIBILITY in viewModel.state.value.attemptedSteps)
+        }
+
+    @Test
+    fun `onGrant sends the matching effect for every grantable step reachable under test`() =
+        runTest {
+            // EXACT_ALARM is intentionally excluded: it's only reachable when
+            // Build.VERSION.SDK_INT >= S, which reads as 0 (unset) under a plain JVM unit
+            // test, so nextStep() always routes VPN straight to DONE here (see onNext's test
+            // above). Looping onNext() until EXACT_ALARM would never terminate.
+            val viewModel = createViewModel()
+            val expected =
+                mapOf(
+                    OnboardingStep.ACCESSIBILITY to OnboardingEffect.OpenAccessibilitySettings,
+                    OnboardingStep.USAGE_ACCESS to OnboardingEffect.OpenUsageAccessSettings,
+                    OnboardingStep.BATTERY to OnboardingEffect.RequestBatteryOptimization,
+                    OnboardingStep.VPN to OnboardingEffect.RequestVpnPrepare,
+                )
+
+            for ((step, effect) in expected) {
+                while (viewModel.state.value.step != step) viewModel.onNext()
+                viewModel.effects.test {
+                    viewModel.onGrant()
+                    assertEquals(effect, awaitItem())
+                }
+            }
+        }
+
+    @Test
+    fun `onGrant at WELCOME records the step as attempted but sends no effect`() =
+        runTest {
+            val viewModel = createViewModel()
+
+            viewModel.effects.test {
+                viewModel.onGrant()
+                expectNoEvents()
+            }
+            assertTrue(OnboardingStep.WELCOME in viewModel.state.value.attemptedSteps)
+        }
+
+    @Test
+    fun `onSkip advances to the next step just like onNext`() =
+        runTest {
+            val viewModel = createViewModel()
+
+            viewModel.onSkip()
+
+            assertEquals(OnboardingStep.ACCESSIBILITY, viewModel.state.value.step)
+        }
+}

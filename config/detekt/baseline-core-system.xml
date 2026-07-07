@@ -1,0 +1,8 @@
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues/>
+  <CurrentIssues>
+    <ID>LoopWithTooManyJumpStatements:UsagePollerWorker.kt$UsagePollerWorker$for</ID>
+    <ID>LoopWithTooManyJumpStatements:UsagePollerWorker.kt$UsagePollerWorker$while</ID>
+  </CurrentIssues>
+</SmellBaseline>

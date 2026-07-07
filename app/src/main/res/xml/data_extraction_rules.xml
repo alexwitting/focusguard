@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    FocusGuard stores usage history and block rules on-device only (see README "Fully offline").
+    Both cloud-backup and device-transfer are left with no <include>, so nothing is eligible for
+    either — this is the explicit, API 31+ equivalent of android:allowBackup="false" below.
+-->
+<data-extraction-rules>
+    <cloud-backup />
+    <device-transfer />
+</data-extraction-rules>

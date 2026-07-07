@@ -1,0 +1,7 @@
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues/>
+  <CurrentIssues>
+    <ID>LongMethod:SettingsViewModel.kt$SettingsViewModel$fun onIntent(intent: SettingsIntent)</ID>
+  </CurrentIssues>
+</SmellBaseline>

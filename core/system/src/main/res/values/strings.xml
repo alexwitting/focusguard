@@ -1,0 +1,4 @@
+<resources>
+    <string name="accessibility_service_label">FocusGuard</string>
+    <string name="accessibility_service_description">FocusGuard monitors which app is in the foreground to enforce your block rules and time limits.</string>
+</resources>

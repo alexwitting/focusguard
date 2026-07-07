@@ -1,0 +1,27 @@
+# Hand-written startup Baseline Profile for FocusGuard.
+# Regenerate with a real device: ./gradlew :macrobenchmark:generateBaselineProfile
+# Then copy the output from macrobenchmark/build/outputs/managed_device_android_test_additional_output/
+# back to this file.
+
+# Application + entry point
+HSPLcom/focusguard/FocusGuardApplication;->onCreate()V
+HSPLcom/focusguard/MainActivity;->onCreate(Landroid/os/Bundle;)V
+
+# Home feature startup path
+HSPLcom/focusguard/feature/home/HomeViewModel;-><init>(Lcom/focusguard/core/domain/usecase/usage/GetDailyUsageUseCase;Lcom/focusguard/core/domain/usecase/usage/GetWeeklyTrendUseCase;Lcom/focusguard/core/domain/usecase/usage/GetBlockedAttemptsUseCase;)V
+
+# Key domain models pre-loaded at startup
+Lcom/focusguard/core/domain/model/AppBlockRule;
+Lcom/focusguard/core/domain/model/AppUsageSummary;
+Lcom/focusguard/core/domain/model/BlockDecision;
+Lcom/focusguard/core/domain/model/BlockDecision$Allow;
+Lcom/focusguard/core/domain/model/BlockDecision$Block;
+Lcom/focusguard/core/domain/model/BlockingStrategy;
+Lcom/focusguard/core/domain/model/BlockingStrategy$AlwaysBlock;
+Lcom/focusguard/core/domain/model/BlockingStrategy$ScheduledBlock;
+Lcom/focusguard/core/domain/model/BlockingStrategy$TimeLimit;
+Lcom/focusguard/core/domain/model/BlockReason;
+Lcom/focusguard/core/domain/model/ContentFilter;
+Lcom/focusguard/core/domain/model/DailyTotal;
+Lcom/focusguard/core/domain/model/TimeWindow;
+Lcom/focusguard/core/domain/model/WebBlockRule;

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Pre-Android-12 equivalent of data_extraction_rules.xml: no <include>, so nothing is eligible
+    for backup. Only reachable if a device somehow ignores android:allowBackup="false" below.
+-->
+<full-backup-content />

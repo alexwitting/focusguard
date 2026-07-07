@@ -1,0 +1,84 @@
+name: FocusGuard CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_call:
+  workflow_dispatch:
+    inputs:
+      build_apk:
+        description: 'Also build and upload the debug APK'
+        type: boolean
+        default: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read        # required for actions/checkout
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+          cache: gradle
+
+      - name: Accept Android licences
+        run: yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses || true
+
+      - name: Lint (ktlint + detekt)
+        run: ./gradlew ktlintCheck detekt
+
+      - name: Unit tests + coverage
+        run: ./gradlew test koverXmlReport koverHtmlReport
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: build/reports/kover/
+
+  build:
+    needs: verify
+    if: github.event_name == 'workflow_dispatch' && inputs.build_apk
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      contents: read        # required for actions/checkout
+      actions: write        # required to delete old artifacts
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+          cache: gradle
+
+      - name: Accept Android licences
+        run: yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses || true
+
+      - name: Build
+        run: ./gradlew assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Clean up artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ids=$(gh api repos/${{ github.repository }}/actions/artifacts \
+            --paginate \
+            --jq '[.artifacts[] | select(.name == "app-debug" and .expired == false)]
+                  | sort_by(.created_at) | reverse | .[3:] | .[].id')
+          for id in $ids; do
+            gh api --method DELETE repos/${{ github.repository }}/actions/artifacts/$id
+          done
