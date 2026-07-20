@@ -6,7 +6,9 @@ import com.focusguard.core.domain.usecase.pin.DisablePinUseCase
 import com.focusguard.core.domain.usecase.pin.GetPinEnabledUseCase
 import com.focusguard.core.domain.usecase.pin.SetPinUseCase
 import com.focusguard.core.domain.usecase.pin.VerifyPinUseCase
+import com.focusguard.core.domain.usecase.settings.EnableWebContentBlockingUseCase
 import com.focusguard.core.domain.usecase.settings.GetBedtimeUseCase
+import com.focusguard.core.domain.usecase.settings.GetWebContentBlockingEnabledUseCase
 import com.focusguard.core.domain.usecase.settings.SetBedtimeUseCase
 import dagger.Module
 import dagger.Provides
@@ -36,4 +38,12 @@ object SettingsUseCaseModule {
 
     @Provides
     fun provideDisablePin(repo: PinRepository): DisablePinUseCase = DisablePinUseCase(repo)
+
+    @Provides
+    fun provideGetWebContentBlockingEnabled(repo: SettingsRepository): GetWebContentBlockingEnabledUseCase =
+        GetWebContentBlockingEnabledUseCase(repo)
+
+    @Provides
+    fun provideEnableWebContentBlocking(repo: SettingsRepository): EnableWebContentBlockingUseCase =
+        EnableWebContentBlockingUseCase(repo)
 }

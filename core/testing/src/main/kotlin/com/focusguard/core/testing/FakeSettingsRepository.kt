@@ -13,6 +13,7 @@ class FakeSettingsRepository : SettingsRepository {
     private val _bedtime = MutableStateFlow<TimeWindow?>(null)
     private val _extensions = MutableStateFlow<Set<Pair<String, LocalDate>>>(emptySet())
     private val _onboardingComplete = MutableStateFlow(false)
+    private val _webContentBlockingEnabled = MutableStateFlow(false)
 
     override fun isGracePeriodEnabled(): Flow<Boolean> = _gracePeriodEnabled
 
@@ -48,5 +49,11 @@ class FakeSettingsRepository : SettingsRepository {
 
     override suspend fun setOnboardingComplete() {
         _onboardingComplete.value = true
+    }
+
+    override fun isWebContentBlockingEnabled(): Flow<Boolean> = _webContentBlockingEnabled
+
+    override suspend fun enableWebContentBlocking() {
+        _webContentBlockingEnabled.value = true
     }
 }

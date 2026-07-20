@@ -10,6 +10,8 @@ data class SettingsState(
     val systemHealth: SystemHealth = SystemHealth(false, false),
     val permissions: PermissionsHealth = PermissionsHealth(false, false, false, false, false),
     val isPinEnabled: Boolean = false,
+    val webContentBlockingEnabled: Boolean = false,
+    val isEnablingWebContentBlocking: Boolean = false,
     val bedtime: TimeWindow? = null,
     val isLoading: Boolean = true,
     // PIN dialog
@@ -73,6 +75,9 @@ sealed interface SettingsIntent {
     data object SaveBedtime : SettingsIntent
 
     data object ClearBedtime : SettingsIntent
+
+    // Website content blocking — enable-only, no corresponding "disable" intent.
+    data object EnableWebContentBlocking : SettingsIntent
 }
 
 sealed interface SettingsEffect {

@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Intent
 import android.os.ParcelFileDescriptor
+import android.util.Log
 import com.focusguard.core.domain.model.WebBlockRule
 import com.focusguard.core.domain.repository.WebBlockRuleRepository
 import com.focusguard.core.system.engine.ContentFilterEngine
@@ -81,15 +82,22 @@ class DnsVpnService : android.net.VpnService() {
             }
         }
 
+        // establish() can throw (e.g. SecurityException under another app's always-on/lockdown
+        // VPN, or if consent is revoked between VpnService.prepare() and this call) as well as
+        // return null on failure. startForeground() above has already posted the notification,
+        // so an uncaught exception here would crash the service mid-start, leaving a misleading
+        // "active" notification behind. Treat a thrown exception the same as a null result.
         val pfd =
-            Builder()
-                .addAddress(VPN_ADDRESS, 32)
-                .addDnsServer(DNS_INTERCEPT)
-                .addRoute(DNS_INTERCEPT, 32)
-                .setMtu(1500)
-                .setBlocking(false)
-                .setSession("FocusGuard")
-                .establish()
+            runCatching {
+                Builder()
+                    .addAddress(VPN_ADDRESS, 32)
+                    .addDnsServer(DNS_INTERCEPT)
+                    .addRoute(DNS_INTERCEPT, 32)
+                    .setMtu(1500)
+                    .setBlocking(false)
+                    .setSession("FocusGuard")
+                    .establish()
+            }.onFailure { Log.e(TAG, "VPN establish() failed", it) }.getOrNull()
 
         if (pfd == null) {
             stopSelf()
@@ -262,6 +270,7 @@ class DnsVpnService : android.net.VpnService() {
 
     companion object {
         const val ACTION_STOP = "com.focusguard.vpn.STOP"
+        private const val TAG = "DnsVpnService"
         private const val NOTIFICATION_ID = 1001
         private const val VPN_ADDRESS = "10.111.222.1"
         private const val DNS_INTERCEPT = "10.111.222.2"

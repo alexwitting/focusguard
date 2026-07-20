@@ -150,5 +150,6 @@ class BlockedActivity : ComponentActivity() {
             BlockReason.TIME_LIMIT_REACHED -> "You've reached your daily time limit"
             BlockReason.OUTSIDE_ALLOWED_WINDOW -> "This app isn't available right now"
             BlockReason.CONTENT_FILTER -> "This content is blocked by a content filter"
+            BlockReason.WEBSITE_BLOCKED -> "This website is blocked"
         }
 }

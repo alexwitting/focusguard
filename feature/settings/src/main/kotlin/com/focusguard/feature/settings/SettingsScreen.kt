@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -43,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -112,21 +114,24 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                     ServiceRow(
                         label = "Website blocking (VPN)",
                         active = state.systemHealth.vpnServiceActive,
-                        actionLabel = if (state.systemHealth.vpnServiceActive) "Stop" else "Start",
+                        actionLabel = if (state.systemHealth.vpnServiceActive) null else "Start",
                         onAction = {
-                            if (state.systemHealth.vpnServiceActive) {
-                                stopVpnService(context)
-                                viewModel.forceRefresh(afterDelayMs = VPN_TOGGLE_REFRESH_DELAY_MS)
+                            val consent = VpnService.prepare(context)
+                            if (consent != null) {
+                                vpnLauncher.launch(consent)
                             } else {
-                                val consent = VpnService.prepare(context)
-                                if (consent != null) {
-                                    vpnLauncher.launch(consent)
-                                } else {
-                                    startVpnService(context)
-                                    viewModel.forceRefresh(afterDelayMs = VPN_TOGGLE_REFRESH_DELAY_MS)
-                                }
+                                startVpnService(context)
+                                viewModel.forceRefresh(afterDelayMs = VPN_TOGGLE_REFRESH_DELAY_MS)
                             }
                         },
+                    )
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
+                    ServiceRow(
+                        label = "Website blocking (browser scan)",
+                        active = state.webContentBlockingEnabled,
+                        actionLabel = if (state.webContentBlockingEnabled) null else "Enable",
+                        loading = state.isEnablingWebContentBlocking,
+                        onAction = { viewModel.onIntent(SettingsIntent.EnableWebContentBlocking) },
                     )
                 }
             }
@@ -292,6 +297,7 @@ private fun ServiceRow(
     label: String,
     active: Boolean,
     actionLabel: String?,
+    loading: Boolean = false,
     onAction: () -> Unit,
 ) {
     Row(
@@ -302,7 +308,10 @@ private fun ServiceRow(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Icon(
                 imageVector = if (active) Icons.Default.Check else Icons.Default.Close,
                 contentDescription = null,
@@ -310,10 +319,22 @@ private fun ServiceRow(
                 modifier = Modifier.size(18.dp),
             )
             Spacer(Modifier.width(8.dp))
-            Text(label, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
-        if (actionLabel != null) {
-            OutlinedButton(onClick = onAction) { Text(actionLabel) }
+        when {
+            loading -> {
+                Spacer(Modifier.width(12.dp))
+                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+            }
+            actionLabel != null -> {
+                Spacer(Modifier.width(8.dp))
+                OutlinedButton(onClick = onAction) { Text(actionLabel) }
+            }
         }
     }
 }
@@ -361,13 +382,4 @@ private fun startVpnService(context: android.content.Context) {
             setClassName(context, "com.focusguard.core.system.vpn.DnsVpnService")
         }
     context.startForegroundService(intent)
-}
-
-private fun stopVpnService(context: android.content.Context) {
-    val intent =
-        Intent().apply {
-            setClassName(context, "com.focusguard.core.system.vpn.DnsVpnService")
-            action = "com.focusguard.vpn.STOP"
-        }
-    context.startService(intent)
 }

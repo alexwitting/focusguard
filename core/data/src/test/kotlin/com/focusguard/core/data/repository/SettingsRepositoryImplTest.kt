@@ -114,6 +114,20 @@ class SettingsRepositoryImplTest {
         }
 
     @Test
+    fun `isWebContentBlockingEnabled defaults to false`() =
+        runTest {
+            assertFalse(repository.isWebContentBlockingEnabled().first())
+        }
+
+    @Test
+    fun `enableWebContentBlocking then isWebContentBlockingEnabled reflects the change`() =
+        runTest {
+            repository.enableWebContentBlocking()
+
+            assertTrue(repository.isWebContentBlockingEnabled().first())
+        }
+
+    @Test
     fun `hasTakenExtensionToday delegates to the usage DAO`() =
         runTest {
             val date = LocalDate.of(2026, 1, 15)

@@ -9,8 +9,10 @@ import com.focusguard.core.domain.usecase.pin.DisablePinUseCase
 import com.focusguard.core.domain.usecase.pin.GetPinEnabledUseCase
 import com.focusguard.core.domain.usecase.pin.SetPinUseCase
 import com.focusguard.core.domain.usecase.pin.VerifyPinUseCase
+import com.focusguard.core.domain.usecase.settings.EnableWebContentBlockingUseCase
 import com.focusguard.core.domain.usecase.settings.GetBedtimeUseCase
 import com.focusguard.core.domain.usecase.settings.GetSystemHealthUseCase
+import com.focusguard.core.domain.usecase.settings.GetWebContentBlockingEnabledUseCase
 import com.focusguard.core.domain.usecase.settings.SetBedtimeUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -37,6 +39,8 @@ class SettingsViewModel
         private val setPin: SetPinUseCase,
         private val disablePin: DisablePinUseCase,
         private val getPinEnabled: GetPinEnabledUseCase,
+        private val getWebContentBlockingEnabled: GetWebContentBlockingEnabledUseCase,
+        private val enableWebContentBlocking: EnableWebContentBlockingUseCase,
     ) : ViewModel() {
         private val _state = MutableStateFlow(SettingsState())
         val state: StateFlow<SettingsState> = _state.asStateFlow()
@@ -51,6 +55,7 @@ class SettingsViewModel
                     getSystemHealth.observePermissionsHealth(),
                     getPinEnabled(),
                     getBedtime(),
+                    getWebContentBlockingEnabled(),
                     ::SettingsScreenData,
                 ).collect { data ->
                     _state.update {
@@ -59,6 +64,7 @@ class SettingsViewModel
                             permissions = data.permissions,
                             isPinEnabled = data.pinEnabled,
                             bedtime = data.bedtime,
+                            webContentBlockingEnabled = data.webContentBlockingEnabled,
                             isLoading = false,
                         )
                     }
@@ -71,6 +77,7 @@ class SettingsViewModel
             val permissions: PermissionsHealth,
             val pinEnabled: Boolean,
             val bedtime: TimeWindow?,
+            val webContentBlockingEnabled: Boolean,
         )
 
         /**
@@ -156,6 +163,15 @@ class SettingsViewModel
                             runCatching { setBedtime(null, null) }
                                 .onFailure { emit(SettingsEffect.ShowSnackbar(it.message ?: "Failed to clear bedtime")) }
                         }
+                    }
+                }
+
+                SettingsIntent.EnableWebContentBlocking -> {
+                    _state.update { it.copy(isEnablingWebContentBlocking = true) }
+                    viewModelScope.launch {
+                        runCatching { enableWebContentBlocking() }
+                            .onFailure { emit(SettingsEffect.ShowSnackbar(it.message ?: "Failed to enable website blocking")) }
+                        _state.update { it.copy(isEnablingWebContentBlocking = false) }
                     }
                 }
             }

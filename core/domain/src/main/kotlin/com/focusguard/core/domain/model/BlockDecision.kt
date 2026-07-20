@@ -13,4 +13,5 @@ enum class BlockReason {
     TIME_LIMIT_REACHED,
     OUTSIDE_ALLOWED_WINDOW,
     CONTENT_FILTER,
+    WEBSITE_BLOCKED,
 }

@@ -30,4 +30,9 @@ interface SettingsRepository {
     fun isOnboardingComplete(): Flow<Boolean>
 
     suspend fun setOnboardingComplete()
+
+    fun isWebContentBlockingEnabled(): Flow<Boolean>
+
+    // Enable-only by design — once on, this cannot be turned back off from within the app.
+    suspend fun enableWebContentBlocking()
 }

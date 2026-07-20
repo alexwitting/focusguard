@@ -67,10 +67,18 @@ class SettingsRepositoryImpl
             dataStore.edit { it[Keys.ONBOARDING_COMPLETE] = true }
         }
 
+        override fun isWebContentBlockingEnabled(): Flow<Boolean> =
+            dataStore.data.map { it[Keys.WEB_CONTENT_BLOCKING_ENABLED] ?: false }
+
+        override suspend fun enableWebContentBlocking() {
+            dataStore.edit { it[Keys.WEB_CONTENT_BLOCKING_ENABLED] = true }
+        }
+
         private object Keys {
             val GRACE_PERIOD_ENABLED = booleanPreferencesKey("grace_period_enabled")
             val SYNC_ENABLED = booleanPreferencesKey("sync_enabled")
             val BEDTIME_JSON = stringPreferencesKey("bedtime_json")
             val ONBOARDING_COMPLETE = booleanPreferencesKey("onboarding_complete")
+            val WEB_CONTENT_BLOCKING_ENABLED = booleanPreferencesKey("web_content_blocking_enabled")
         }
     }

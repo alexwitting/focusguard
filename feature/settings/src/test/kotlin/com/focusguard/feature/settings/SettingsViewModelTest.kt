@@ -8,8 +8,10 @@ import com.focusguard.core.domain.usecase.pin.DisablePinUseCase
 import com.focusguard.core.domain.usecase.pin.GetPinEnabledUseCase
 import com.focusguard.core.domain.usecase.pin.SetPinUseCase
 import com.focusguard.core.domain.usecase.pin.VerifyPinUseCase
+import com.focusguard.core.domain.usecase.settings.EnableWebContentBlockingUseCase
 import com.focusguard.core.domain.usecase.settings.GetBedtimeUseCase
 import com.focusguard.core.domain.usecase.settings.GetSystemHealthUseCase
+import com.focusguard.core.domain.usecase.settings.GetWebContentBlockingEnabledUseCase
 import com.focusguard.core.domain.usecase.settings.SetBedtimeUseCase
 import com.focusguard.core.testing.FakePinRepository
 import com.focusguard.core.testing.FakeSettingsRepository
@@ -54,6 +56,8 @@ class SettingsViewModelTest {
             setPin = setPinOverride ?: SetPinUseCase(pinRepository),
             disablePin = disablePinOverride ?: DisablePinUseCase(pinRepository),
             getPinEnabled = GetPinEnabledUseCase(pinRepository),
+            getWebContentBlockingEnabled = GetWebContentBlockingEnabledUseCase(settingsRepository),
+            enableWebContentBlocking = EnableWebContentBlockingUseCase(settingsRepository),
         )
 
     @Test
@@ -492,5 +496,16 @@ class SettingsViewModelTest {
             viewModel.forceRefresh(afterDelayMs = 50)
 
             awaitCondition { viewModel.state.value.systemHealth.accessibilityServiceActive }
+        }
+
+    @Test
+    fun `EnableWebContentBlocking turns website content blocking on`() =
+        runTest {
+            val viewModel = createViewModel()
+            assertFalse(viewModel.state.value.webContentBlockingEnabled)
+
+            viewModel.onIntent(SettingsIntent.EnableWebContentBlocking)
+
+            assertTrue(viewModel.state.value.webContentBlockingEnabled)
         }
 }
