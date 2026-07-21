@@ -148,32 +148,36 @@ class SettingsViewModel
 
                 SettingsIntent.SaveBedtime -> handleSaveBedtime()
 
-                SettingsIntent.ClearBedtime -> {
-                    if (_state.value.isPinEnabled) {
-                        _state.update {
-                            it.copy(
-                                pinStep = PinStep.VerifyOld,
-                                pendingPinAction = PinAction.ClearBedtime,
-                                pinInput = "",
-                                pinError = null,
-                            )
-                        }
-                    } else {
-                        viewModelScope.launch {
-                            runCatching { setBedtime(null, null) }
-                                .onFailure { emit(SettingsEffect.ShowSnackbar(it.message ?: "Failed to clear bedtime")) }
-                        }
-                    }
-                }
+                SettingsIntent.ClearBedtime -> handleClearBedtime()
 
-                SettingsIntent.EnableWebContentBlocking -> {
-                    _state.update { it.copy(isEnablingWebContentBlocking = true) }
-                    viewModelScope.launch {
-                        runCatching { enableWebContentBlocking() }
-                            .onFailure { emit(SettingsEffect.ShowSnackbar(it.message ?: "Failed to enable website blocking")) }
-                        _state.update { it.copy(isEnablingWebContentBlocking = false) }
-                    }
+                SettingsIntent.EnableWebContentBlocking -> handleEnableWebContentBlocking()
+            }
+        }
+
+        private fun handleClearBedtime() {
+            if (_state.value.isPinEnabled) {
+                _state.update {
+                    it.copy(
+                        pinStep = PinStep.VerifyOld,
+                        pendingPinAction = PinAction.ClearBedtime,
+                        pinInput = "",
+                        pinError = null,
+                    )
                 }
+            } else {
+                viewModelScope.launch {
+                    runCatching { setBedtime(null, null) }
+                        .onFailure { emit(SettingsEffect.ShowSnackbar(it.message ?: "Failed to clear bedtime")) }
+                }
+            }
+        }
+
+        private fun handleEnableWebContentBlocking() {
+            _state.update { it.copy(isEnablingWebContentBlocking = true) }
+            viewModelScope.launch {
+                runCatching { enableWebContentBlocking() }
+                    .onFailure { emit(SettingsEffect.ShowSnackbar(it.message ?: "Failed to enable website blocking")) }
+                _state.update { it.copy(isEnablingWebContentBlocking = false) }
             }
         }
 

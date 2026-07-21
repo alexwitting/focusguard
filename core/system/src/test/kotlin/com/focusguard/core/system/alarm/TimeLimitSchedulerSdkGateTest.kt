@@ -39,6 +39,6 @@ class TimeLimitSchedulerSdkGateTest {
 
         scheduler.scheduleBlock("com.app", "App", remainingMinutes = 5)
 
-        assertTrue(shadowOf(alarmManager).nextScheduledAlarm != null)
+        assertTrue(shadowOf(alarmManager).scheduledAlarms.isNotEmpty())
     }
 }

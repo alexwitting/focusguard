@@ -238,8 +238,7 @@ class FocusGuardAccessibilityServiceTest {
      * block overlay. Draining the whole queue and matching by content, rather than assuming a
      * fixed count/order, keeps assertions robust to that.
      */
-    private fun drainStartedActivities(): List<Intent> =
-        generateSequence { shadowOf(service).nextStartedActivity }.toList()
+    private fun drainStartedActivities(): List<Intent> = generateSequence { shadowOf(service).nextStartedActivity }.toList()
 
     @Test
     fun `ignores accessibility events with no package name`() {

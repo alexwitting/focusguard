@@ -67,8 +67,7 @@ class SettingsRepositoryImpl
             dataStore.edit { it[Keys.ONBOARDING_COMPLETE] = true }
         }
 
-        override fun isWebContentBlockingEnabled(): Flow<Boolean> =
-            dataStore.data.map { it[Keys.WEB_CONTENT_BLOCKING_ENABLED] ?: false }
+        override fun isWebContentBlockingEnabled(): Flow<Boolean> = dataStore.data.map { it[Keys.WEB_CONTENT_BLOCKING_ENABLED] ?: false }
 
         override suspend fun enableWebContentBlocking() {
             dataStore.edit { it[Keys.WEB_CONTENT_BLOCKING_ENABLED] = true }

@@ -260,9 +260,8 @@ class FocusGuardAccessibilityService : AccessibilityService() {
      * throttle so neither can hammer the node tree.
      */
     private fun scanForBlockedWebsite(pkg: String): Boolean {
-        if (!webContentBlockingEnabledCache.get()) return false
         val rules = webBlockRulesCache.get()
-        if (rules.isEmpty()) return false
+        if (!webContentBlockingEnabledCache.get() || rules.isEmpty()) return false
 
         val now = System.currentTimeMillis()
         if (now - lastWebScanAtMs.get() < WEB_SCAN_THROTTLE_MS) return false
@@ -349,7 +348,8 @@ class FocusGuardAccessibilityService : AccessibilityService() {
             val node = queue.removeFirst()
             visited++
             val isUrlBarNode = urlBarResourceId != null && node.viewIdResourceName == urlBarResourceId
-            if (node.isVisibleToUser && node.isFocused && (isUrlBarNode || node.isEditable)) return true
+            val isCandidateField = isUrlBarNode || node.isEditable
+            if (node.isVisibleToUser && node.isFocused && isCandidateField) return true
             for (i in 0 until node.childCount) node.getChild(i)?.let(queue::add)
         }
         return false
@@ -390,7 +390,8 @@ class FocusGuardAccessibilityService : AccessibilityService() {
             visited++
             val text = node.text?.toString()
             val looksLikeAddressBar = node.isEditable || node.className?.contains("EditText") == true
-            if (node.isVisibleToUser && looksLikeAddressBar && text != null && WebContentFilterEngine.looksLikeUrl(text)) {
+            val isVisibleCandidate = node.isVisibleToUser && looksLikeAddressBar
+            if (isVisibleCandidate && text != null && WebContentFilterEngine.looksLikeUrl(text)) {
                 return text
             }
             for (i in 0 until node.childCount) node.getChild(i)?.let(queue::add)
@@ -412,9 +413,8 @@ class FocusGuardAccessibilityService : AccessibilityService() {
             val node = queue.removeFirst()
             visited++
             val description = node.contentDescription?.toString()
-            if (node.isVisibleToUser && node.isClickable && description != null &&
-                description.contains("close tab", ignoreCase = true)
-            ) {
+            val isCloseTabCandidate = node.isVisibleToUser && node.isClickable
+            if (isCloseTabCandidate && description != null && description.contains("close tab", ignoreCase = true)) {
                 node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                 return
             }

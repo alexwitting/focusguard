@@ -38,7 +38,8 @@ class WebContentFilterEngine
         private fun extractHostname(text: String): String {
             val withoutScheme = text.substringAfter("://", text)
             val end =
-                withoutScheme.indexOfFirst { it == '/' || it == '?' || it == '#' || it.isWhitespace() }
+                withoutScheme
+                    .indexOfFirst { it == '/' || it == '?' || it == '#' || it.isWhitespace() }
                     .let { if (it == -1) withoutScheme.length else it }
             return withoutScheme.substring(0, end).trim().lowercase()
         }

@@ -84,6 +84,7 @@ class SystemHealthRepositoryImpl
          * narrow single-host route (see DnsVpnService.kt), not a full-tunnel default route, so it
          * never becomes the OS's "active" network.
          */
+        @Suppress("DEPRECATION")
         private fun hasActiveVpnNetwork(): Boolean {
             val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             return cm.allNetworks.any { network ->

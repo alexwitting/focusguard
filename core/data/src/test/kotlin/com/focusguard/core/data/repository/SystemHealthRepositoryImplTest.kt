@@ -34,6 +34,7 @@ import org.junit.jupiter.api.Test
  * (see that method's doc comment for why), not event-driven — tests stub
  * `allNetworks`/`getNetworkCapabilities` directly rather than capturing and invoking a callback.
  */
+@Suppress("DEPRECATION")
 class SystemHealthRepositoryImplTest {
     private val context = mockk<Context>()
     private val accessibilityManager = mockk<AccessibilityManager>()

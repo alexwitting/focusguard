@@ -30,9 +30,17 @@ class UsageStatsForegroundDetector
             val event = UsageEvents.Event()
             while (events.hasNextEvent()) {
                 events.getNextEvent(event)
+                // The OS emits MOVE_TO_FOREGROUND/BACKGROUND on API < 29 and ACTIVITY_RESUMED/
+                // PAUSED on API 29+ (the latter pair replaced the former for better multi-window
+                // handling) — never both. minSdk here is 26, so both must be handled or this
+                // silently stops detecting anything on Android 8/9. The MOVE_TO_* constants are
+                // deprecated only as a recommendation to prefer ACTIVITY_* on newer APIs, not
+                // because they stop working — suppressed below rather than dropped.
+                @Suppress("DEPRECATION")
                 when (event.eventType) {
-                    UsageEvents.Event.MOVE_TO_FOREGROUND -> foreground = event.packageName
-                    UsageEvents.Event.MOVE_TO_BACKGROUND -> if (event.packageName == foreground) foreground = null
+                    UsageEvents.Event.MOVE_TO_FOREGROUND, UsageEvents.Event.ACTIVITY_RESUMED -> foreground = event.packageName
+                    UsageEvents.Event.MOVE_TO_BACKGROUND, UsageEvents.Event.ACTIVITY_PAUSED ->
+                        if (event.packageName == foreground) foreground = null
                 }
             }
             return foreground?.takeIf { it in WebContentFilterEngine.KNOWN_BROWSERS }

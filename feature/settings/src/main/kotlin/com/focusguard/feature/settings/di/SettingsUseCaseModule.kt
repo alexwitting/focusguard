@@ -40,10 +40,8 @@ object SettingsUseCaseModule {
     fun provideDisablePin(repo: PinRepository): DisablePinUseCase = DisablePinUseCase(repo)
 
     @Provides
-    fun provideGetWebContentBlockingEnabled(repo: SettingsRepository): GetWebContentBlockingEnabledUseCase =
-        GetWebContentBlockingEnabledUseCase(repo)
+    fun provideGetWebContentBlockingEnabled(repo: SettingsRepository): GetWebContentBlockingEnabledUseCase = GetWebContentBlockingEnabledUseCase(repo)
 
     @Provides
-    fun provideEnableWebContentBlocking(repo: SettingsRepository): EnableWebContentBlockingUseCase =
-        EnableWebContentBlockingUseCase(repo)
+    fun provideEnableWebContentBlocking(repo: SettingsRepository): EnableWebContentBlockingUseCase = EnableWebContentBlockingUseCase(repo)
 }
