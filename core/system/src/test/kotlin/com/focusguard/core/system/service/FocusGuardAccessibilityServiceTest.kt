@@ -184,10 +184,17 @@ class FocusGuardAccessibilityServiceTest {
     }
 
     /**
-     * Same reasoning as connectService(), but polls webContentBlockingEnabledCache — populated
-     * by settingsRepository.isWebContentBlockingEnabled(), separately from rulesCache/
-     * activeFiltersCache. Callers must enable web content blocking on settingsRepository before
-     * invoking this.
+     * Same reasoning as connectService(), but polls both webContentBlockingEnabledCache
+     * (populated by settingsRepository.isWebContentBlockingEnabled()) and webBlockRulesCache
+     * (populated by webBlockRuleRepository.getWebBlockRules()) — two independent
+     * onServiceConnected() Flow collectors with no ordering guarantee relative to each other.
+     * Waiting on only one of them is a real race: callers set web-block rules and call
+     * enableWebContentBlocking() before invoking this, but if the enabled-flag collector happens
+     * to settle on Robolectric's Main dispatcher before the rules collector does, the caller's
+     * very next onAccessibilityEvent() call would run scanForBlockedWebsite() against an empty
+     * rules cache and silently detect nothing — an intermittent, hard-to-reproduce test failure
+     * that has nothing to do with the production code under test. Callers must enable web content
+     * blocking and set at least one web-block rule on the fakes before invoking this.
      */
     private fun connectServiceWithWebBlocking() {
         val method = FocusGuardAccessibilityService::class.java.getDeclaredMethod("onServiceConnected")
@@ -199,8 +206,13 @@ class FocusGuardAccessibilityServiceTest {
         @Suppress("UNCHECKED_CAST")
         val enabledCache = enabledCacheField.get(service) as AtomicReference<Boolean>
 
+        val rulesCacheField = FocusGuardAccessibilityService::class.java.getDeclaredField("webBlockRulesCache")
+        rulesCacheField.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val rulesCache = rulesCacheField.get(service) as AtomicReference<List<WebBlockRule>>
+
         val deadline = System.currentTimeMillis() + 2_000
-        while (!enabledCache.get() && System.currentTimeMillis() < deadline) {
+        while ((!enabledCache.get() || rulesCache.get().isEmpty()) && System.currentTimeMillis() < deadline) {
             shadowOf(Looper.getMainLooper()).idle()
             Thread.sleep(20)
         }

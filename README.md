@@ -1,7 +1,6 @@
 # FocusGuard
 
 [![CI](https://github.com/alexwitting/focusguard/actions/workflows/focusguard.yml/badge.svg)](https://github.com/alexwitting/focusguard/actions/workflows/focusguard.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 This was an exercise in building an application with Claude code.
 
