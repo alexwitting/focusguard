@@ -35,10 +35,22 @@ class BlockedViewModel
         private val _effects = MutableSharedFlow<BlockedEffect>()
         val effects: SharedFlow<BlockedEffect> = _effects.asSharedFlow()
 
+        /** The block this screen last initialised for — see [initialize]. */
+        private var initializedFor: Pair<String, BlockReason>? = null
+
+        /**
+         * Records the blocked attempt and works out whether an extension can be offered. Runs
+         * once per block: the screen calls it from a LaunchedEffect, which re-runs on rotation
+         * and used to record the same block again each time.
+         */
         fun initialize(
             packageName: String,
             reason: BlockReason,
         ) {
+            val key = packageName to reason
+            if (initializedFor == key) return
+            initializedFor = key
+            _state.update { it.copy(canRequestExtension = false) }
             viewModelScope.launch {
                 runCatching {
                     usageRepository.recordBlockedAttempt(packageName)

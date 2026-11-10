@@ -42,6 +42,12 @@ dependencies {
     testImplementation(libs.mockk)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.turbine)
+    // UsageDaoTest runs Room's real SQL against an in-memory database. Robolectric's runner is
+    // JUnit4-native, so (as in :core:system) that file opts into JUnit4 + the vintage engine.
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.junit)
+    testRuntimeOnly(libs.junit5.vintage.engine)
 }
 
 // Regression gate, not a target — see :core:domain's build.gradle.kts for why.

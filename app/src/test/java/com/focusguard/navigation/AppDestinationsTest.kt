@@ -15,7 +15,7 @@ class AppDestinationsTest {
     @Test
     fun `top level destination labels match their route`() {
         assertEquals(
-            listOf("Home", "Block", "Settings"),
+            listOf("Today", "Block", "Settings"),
             TOP_LEVEL_DESTINATIONS.map { it.label },
         )
     }

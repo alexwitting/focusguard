@@ -15,5 +15,8 @@ replay_pid*.log
 *.hprof
 *.jks
 *.keystore
+# Shared, non-secret debug key (standard "android" passwords) so local and CI debug APKs
+# install over each other — see AndroidApplicationConventionPlugin.
+!config/signing/debug.keystore
 google-services.json
 TODO.md

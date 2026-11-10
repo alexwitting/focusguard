@@ -3,6 +3,7 @@ package com.focusguard.core.domain.usecase.block
 import com.focusguard.core.domain.model.PinVerificationToken
 import com.focusguard.core.domain.repository.BlockRuleRepository
 import com.focusguard.core.domain.repository.PinRepository
+import com.focusguard.core.domain.time.TestClock
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -15,9 +16,10 @@ import org.junit.jupiter.api.Test
 import java.time.Instant
 
 class DeleteAppBlockRuleUseCaseTest {
+    private val clock = TestClock()
     private val blockRuleRepository = mockk<BlockRuleRepository>()
     private val pinRepository = mockk<PinRepository>()
-    private val useCase = DeleteAppBlockRuleUseCase(blockRuleRepository, pinRepository)
+    private val useCase = DeleteAppBlockRuleUseCase(blockRuleRepository, pinRepository, clock)
 
     @Test
     fun `deletes the rule when PIN is disabled`() =

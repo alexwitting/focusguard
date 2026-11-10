@@ -43,6 +43,12 @@ class KoverConventionPlugin : Plugin<Project> {
                                 "*_Impl",
                                 "*_Impl\$*",
                                 "*ScreenKt*",
+                                // Dialogs and bottom sheets are Compose UI files too; keep any
+                                // testable logic they need in a separate file (e.g. BedtimeSummary.kt).
+                                "*DialogKt",
+                                "*DialogKt\$*",
+                                "*SheetKt",
+                                "*SheetKt\$*",
                                 "*Activity*",
                                 "*Application*",
                                 "*Module",
@@ -52,9 +58,22 @@ class KoverConventionPlugin : Plugin<Project> {
                                 // Screen files (mapping a domain enum to icon/title/copy text) —
                                 // same non-unit-testable category as the screens themselves.
                                 // Add future look-alikes here rather than excluding the whole file.
-                                "StepMeta",
-                                "StrategyOption",
-                                "FilterInfo",
+                                // Patterns match fully-qualified names, hence the "*." prefix — a bare
+                                // class name silently matches nothing.
+                                "*.StepMeta",
+                                "*.StepMeta\$*",
+                                "*.StrategyOption",
+                                "*.StrategyOption\$*",
+                                "*.FilterInfo",
+                                "*.FilterInfo\$*",
+                                "*.RuleDetail",
+                                "*.RuleDetail\$*",
+                                "*.HealthItem",
+                                "*.HealthItem\$*",
+                                "*.BlockedCopy",
+                                "*.BlockedCopy\$*",
+                                "*.BlockTarget",
+                                "*.BlockTarget\$*",
                             )
                             annotatedBy("androidx.compose.runtime.Composable")
                         }

@@ -1,9 +1,14 @@
 package com.focusguard
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -12,14 +17,12 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.core.content.ContextCompat
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavDestination.Companion.hasRoute
@@ -35,6 +38,7 @@ import com.focusguard.feature.home.HomeScreen
 import com.focusguard.feature.onboarding.OnboardingScreen
 import com.focusguard.feature.settings.SettingsScreen
 import com.focusguard.navigation.BlockRoute
+import com.focusguard.navigation.FocusGuardNavigationBar
 import com.focusguard.navigation.HomeRoute
 import com.focusguard.navigation.OnboardingRoute
 import com.focusguard.navigation.SettingsRoute
@@ -77,6 +81,18 @@ class MainActivity : ComponentActivity() {
                         }
                     } ?: false
 
+                // Android 13+ drops every notification (time-limit warnings, the "blocking is
+                // off" alert) until POST_NOTIFICATIONS is granted at runtime — declaring it in the
+                // manifest isn't enough. Ask once the user reaches the main tabs, i.e. after
+                // onboarding, rather than stacking it onto the permission steps there.
+                val notificationPermission =
+                    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+                LaunchedEffect(showBottomBar) {
+                    if (showBottomBar && needsNotificationPermission()) {
+                        notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                }
+
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
                     // Zero content insets: each screen's TopAppBar handles the status bar.
@@ -84,31 +100,28 @@ class MainActivity : ComponentActivity() {
                     contentWindowInsets = WindowInsets(0, 0, 0, 0),
                     bottomBar = {
                         if (showBottomBar) {
-                            NavigationBar {
-                                TOP_LEVEL_DESTINATIONS.forEach { navDest ->
-                                    val selected =
-                                        when (navDest.route) {
+                            val selectedRoute =
+                                TOP_LEVEL_DESTINATIONS
+                                    .firstOrNull { td ->
+                                        when (td.route) {
                                             HomeRoute -> currentDestination.hasRoute<HomeRoute>() == true
                                             BlockRoute -> currentDestination.hasRoute<BlockRoute>() == true
                                             SettingsRoute -> currentDestination.hasRoute<SettingsRoute>() == true
                                             else -> false
                                         }
-                                    NavigationBarItem(
-                                        selected = selected,
-                                        onClick = {
-                                            navController.navigate(navDest.route) {
-                                                popUpTo(navController.graph.startDestinationId) {
-                                                    saveState = true
-                                                }
-                                                launchSingleTop = true
-                                                restoreState = true
-                                            }
-                                        },
-                                        icon = { Icon(navDest.icon, contentDescription = navDest.label) },
-                                        label = { Text(navDest.label) },
-                                    )
-                                }
-                            }
+                                    }?.route
+                            FocusGuardNavigationBar(
+                                selectedRoute = selectedRoute,
+                                onSelect = { route ->
+                                    navController.navigate(route) {
+                                        popUpTo(navController.graph.startDestinationId) {
+                                            saveState = true
+                                        }
+                                        launchSingleTop = true
+                                        restoreState = true
+                                    }
+                                },
+                            )
                         }
                     },
                 ) { innerPadding ->
@@ -132,7 +145,16 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                         composable<HomeRoute> {
-                            HomeScreen(modifier = Modifier.fillMaxSize())
+                            HomeScreen(
+                                modifier = Modifier.fillMaxSize(),
+                                onOpenSettings = {
+                                    navController.navigate(SettingsRoute) {
+                                        popUpTo(navController.graph.startDestinationId) { saveState = true }
+                                        launchSingleTop = true
+                                        restoreState = true
+                                    }
+                                },
+                            )
                         }
                         composable<BlockRoute> {
                             BlockScreen(modifier = Modifier.fillMaxSize())
@@ -145,4 +167,8 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    private fun needsNotificationPermission(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
 }

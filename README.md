@@ -8,6 +8,15 @@ Android app that works as an app, reels and website blocker.
 Block distracting apps, filter websites and short-form content, enforce daily time limits, and track your usage
 — all without cloud accounts or subscriptions.
 
+<p align="center">
+  <img src="docs/screenshots/home.png" alt="Today screen: screen time, weekly chart and daily limits" width="300">
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/block-apps.png" alt="Block screen: app rules and other apps" width="300">
+</p>
+
+<sub>Screenshots are rendered from the real Compose screens with sample data — regenerate them with
+`./gradlew :app:testDebugUnitTest --tests "*ReadmeScreenshots*" -PrecordScreenshots`.</sub>
+
 ## Features
 
 - **App blocking** — block any installed app on a schedule or always

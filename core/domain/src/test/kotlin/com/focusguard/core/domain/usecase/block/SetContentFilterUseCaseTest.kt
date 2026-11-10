@@ -4,6 +4,7 @@ import com.focusguard.core.domain.model.ContentFilter
 import com.focusguard.core.domain.model.PinVerificationToken
 import com.focusguard.core.domain.repository.PinRepository
 import com.focusguard.core.domain.repository.WebBlockRuleRepository
+import com.focusguard.core.domain.time.TestClock
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -16,9 +17,10 @@ import org.junit.jupiter.api.Test
 import java.time.Instant
 
 class SetContentFilterUseCaseTest {
+    private val clock = TestClock()
     private val webBlockRuleRepository = mockk<WebBlockRuleRepository>()
     private val pinRepository = mockk<PinRepository>()
-    private val useCase = SetContentFilterUseCase(webBlockRuleRepository, pinRepository)
+    private val useCase = SetContentFilterUseCase(webBlockRuleRepository, pinRepository, clock)
 
     @Test
     fun `sets the filter when PIN is disabled`() =

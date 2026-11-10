@@ -1,8 +1,10 @@
 package com.focusguard.core.system.service
 
 import android.accessibilityservice.AccessibilityService
+import android.content.ComponentName
 import android.content.Intent
 import android.net.Uri
+import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
@@ -11,6 +13,8 @@ import com.focusguard.core.domain.model.BlockDecision
 import com.focusguard.core.domain.model.BlockReason
 import com.focusguard.core.domain.model.BlockingStrategy
 import com.focusguard.core.domain.model.ContentFilter
+import com.focusguard.core.domain.model.ExtensionPolicy
+import com.focusguard.core.domain.model.TimeWindow
 import com.focusguard.core.domain.model.WebBlockRule
 import com.focusguard.core.domain.repository.BlockRuleRepository
 import com.focusguard.core.domain.repository.SettingsRepository
@@ -22,6 +26,7 @@ import com.focusguard.core.system.engine.AppBlockingEngine
 import com.focusguard.core.system.engine.ContentFilterEngine
 import com.focusguard.core.system.engine.WebContentFilterEngine
 import com.focusguard.core.system.foreground.UsageStatsForegroundDetector
+import com.focusguard.core.system.usage.UsageRecorder
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -32,6 +37,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
 
@@ -57,6 +63,8 @@ class FocusGuardAccessibilityService : AccessibilityService() {
 
     @Inject lateinit var usageStatsForegroundDetector: UsageStatsForegroundDetector
 
+    @Inject lateinit var usageRecorder: UsageRecorder
+
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val rulesCache = AtomicReference<Map<String, AppBlockRule>>(emptyMap())
     private val activeFiltersCache = AtomicReference<Set<ContentFilter>>(emptySet())
@@ -65,6 +73,8 @@ class FocusGuardAccessibilityService : AccessibilityService() {
     private val webContentBlockingEnabledCache = AtomicReference(false)
     private val lastWebScanAtMs = AtomicReference(0L)
     private val lastWebBlockAction = AtomicReference("" to 0L)
+    private val bedtimeCache = AtomicReference<TimeWindow?>(null)
+    private val activityWindowCache = ConcurrentHashMap<String, Boolean>()
 
     override fun onCreate() {
         super.onCreate()
@@ -94,6 +104,12 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         }
         serviceScope.launch {
             settingsRepository
+                .getBedtime()
+                .flowOn(Dispatchers.IO)
+                .collect { window -> bedtimeCache.set(window) }
+        }
+        serviceScope.launch {
+            settingsRepository
                 .isWebContentBlockingEnabled()
                 .flowOn(Dispatchers.IO)
                 .collect { enabled -> webContentBlockingEnabledCache.set(enabled) }
@@ -112,7 +128,10 @@ class FocusGuardAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         val pkg = event.packageName?.toString() ?: return
-        if (pkg == packageName) return
+        if (pkg == packageName) {
+            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) handleOwnWindow(event)
+            return
+        }
 
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> handleWindowStateChanged(pkg, event)
@@ -141,12 +160,44 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         if (detection != null) blockContentFilter(detection.label)
     }
 
+    /**
+     * FocusGuard's own screens (the block screen, the main app) count as leaving the previous
+     * app. Ignoring them entirely used to leave the blocked app recorded as "still in front", so
+     * picking it from Recents straight off the block screen looked like an in-app event and
+     * skipped the rule check — and after an extension, nothing re-armed the time-limit alarm.
+     */
+    private fun handleOwnWindow(event: AccessibilityEvent) {
+        if (!isActivityWindow(packageName, event.className?.toString())) return
+        val prev = currentForegroundPkg.getAndSet(packageName)
+        if (prev.isNotEmpty() && prev != packageName) timeLimitScheduler.cancelBlock(prev)
+    }
+
+    /**
+     * Whether a window-state event comes from a real Activity of [pkg]. The keyboard, the
+     * notification shade, toasts and in-app dialogs all fire TYPE_WINDOW_STATE_CHANGED too;
+     * treating those as app switches cancelled the outgoing app's time-limit alarm (opening the
+     * keyboard in a limited app stopped its timer) without anything re-arming it.
+     */
+    private fun isActivityWindow(
+        pkg: String,
+        className: String?,
+    ): Boolean {
+        if (className.isNullOrEmpty()) return false
+        return activityWindowCache.getOrPut("$pkg/$className") {
+            runCatching { packageManager.getActivityInfo(ComponentName(pkg, className), 0) }.isSuccess
+        }
+    }
+
     private fun handleWindowStateChanged(
         pkg: String,
         event: AccessibilityEvent,
     ) {
         val className = event.className?.toString()
         val prev = currentForegroundPkg.get()
+
+        // A non-activity window from some other package (keyboard, shade, toast) isn't an app
+        // switch — leave the current app and its timer alone.
+        if (prev != pkg && !isActivityWindow(pkg, className)) return
 
         if (prev == pkg) {
             // Same app still in foreground — check in-app navigation to short-form content.
@@ -179,27 +230,45 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         val now = clockProvider.now()
         val strategy = rule.strategy
 
+        val bedtime = bedtimeCache.get()
+
         if (strategy is BlockingStrategy.TimeLimit) {
             serviceScope.launch(Dispatchers.IO) {
+                // Usage is otherwise only written every ~15 minutes; record up to now so the
+                // limit is checked against what's actually been used, not the last poll.
+                runCatching { usageRecorder.recordUpToNow() }.onFailure { Log.w(TAG, "Usage refresh failed", it) }
                 val used = usageRepository.getTodayUsageMinutes(pkg).toLong()
                 val extensionTaken =
                     settingsRepository
                         .hasTakenExtensionToday(pkg, clockProvider.today())
                         .first()
-                val effectiveLimit = strategy.dailyLimitMinutes + if (extensionTaken) 15 else 0
+                val effectiveLimit = strategy.dailyLimitMinutes + if (extensionTaken) ExtensionPolicy.MINUTES else 0
                 val effectiveRule = rule.copy(strategy = BlockingStrategy.TimeLimit(effectiveLimit))
-                val decision = blockingEngine.decide(effectiveRule, now, used)
+                val decision = blockingEngine.decide(effectiveRule, now, used, bedtime)
                 if (decision is BlockDecision.Block) {
                     launchBlockedScreen(pkg, rule.label, decision.reason)
                 } else {
-                    val remaining = effectiveLimit.toLong() - used
-                    timeLimitScheduler.scheduleBlock(pkg, rule.label, remaining)
+                    val limitDelayMs = (effectiveLimit.toLong() - used) * MILLIS_PER_MINUTE
+                    val upcoming = blockingEngine.nextBlock(rule, now, bedtime)
+                    // One alarm per app, so arm whichever comes first: the limit running out or
+                    // bedtime starting.
+                    if (upcoming != null && upcoming.delay.toMillis() < limitDelayMs) {
+                        timeLimitScheduler.scheduleBlockIn(pkg, rule.label, upcoming.delay.toMillis(), upcoming.reason)
+                    } else {
+                        timeLimitScheduler.scheduleBlockIn(pkg, rule.label, limitDelayMs, BlockReason.TIME_LIMIT_REACHED)
+                    }
                 }
             }
         } else {
-            val decision = blockingEngine.decide(rule, now, 0L)
+            val decision = blockingEngine.decide(rule, now, 0L, bedtime)
             if (decision is BlockDecision.Block) {
                 launchBlockedScreen(pkg, rule.label, decision.reason)
+            } else {
+                // Allowed right now — but an allowed-hours window may close, or bedtime start,
+                // while the app is still open. Arm a block for that moment.
+                blockingEngine.nextBlock(rule, now, bedtime)?.let {
+                    timeLimitScheduler.scheduleBlockIn(pkg, rule.label, it.delay.toMillis(), it.reason)
+                }
             }
         }
     }
@@ -263,7 +332,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         val rules = webBlockRulesCache.get()
         if (!webContentBlockingEnabledCache.get() || rules.isEmpty()) return false
 
-        val now = System.currentTimeMillis()
+        val now = clockProvider.epochMillis()
         if (now - lastWebScanAtMs.get() < WEB_SCAN_THROTTLE_MS) return false
         lastWebScanAtMs.set(now)
 
@@ -458,5 +527,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         private const val WEB_BLOCK_COOLDOWN_MS = 15_000L
         private const val USAGE_STATS_POLL_INTERVAL_MS = 2_000L
         private const val SAFE_REDIRECT_URL = "https://www.google.com/"
+        private const val TAG = "FocusGuardA11y"
+        private const val MILLIS_PER_MINUTE = 60_000L
     }
 }

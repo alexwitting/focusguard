@@ -14,6 +14,10 @@ android {
         versionCode = 1
         versionName = "1.0.0"
     }
+    testOptions {
+        // Robolectric needs merged resources (fonts, themes) to render Compose screenshots.
+        unitTests.isIncludeAndroidResources = true
+    }
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -41,6 +45,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.androidx.compose.material3.adaptive.navigation.suite)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.hilt.lifecycle.viewmodel.compose)
@@ -56,6 +61,15 @@ dependencies {
     testImplementation(libs.mockk)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.turbine)
+    // README screenshots: Robolectric renders the real Compose screens, Roborazzi saves PNGs.
+    // JUnit4 + vintage engine for Robolectric's own runner, same as :core:system.
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.roborazzi)
+    testImplementation(libs.roborazzi.compose)
+    testImplementation(libs.junit)
+    testRuntimeOnly(libs.junit5.vintage.engine)
 
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
@@ -65,6 +79,13 @@ dependencies {
 }
 
 // Regression gate, not a target — see :core:domain's build.gradle.kts for why.
+// `./gradlew :app:testDebugUnitTest --tests "*ReadmeScreenshots*" -PrecordScreenshots`
+// regenerates docs/screenshots/*.png. Without the flag those tests are skipped.
+tasks.withType<Test>().configureEach {
+    systemProperty("roborazzi.test.record", providers.gradleProperty("recordScreenshots").isPresent.toString())
+    systemProperty("focusguard.screenshotDir", rootProject.file("docs/screenshots").absolutePath)
+}
+
 kover {
     reports {
         verify {

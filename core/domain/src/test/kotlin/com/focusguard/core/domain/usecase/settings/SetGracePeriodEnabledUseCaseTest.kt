@@ -3,6 +3,7 @@ package com.focusguard.core.domain.usecase.settings
 import com.focusguard.core.domain.model.PinVerificationToken
 import com.focusguard.core.domain.repository.PinRepository
 import com.focusguard.core.domain.repository.SettingsRepository
+import com.focusguard.core.domain.time.TestClock
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -15,9 +16,10 @@ import org.junit.jupiter.api.Test
 import java.time.Instant
 
 class SetGracePeriodEnabledUseCaseTest {
+    private val clock = TestClock()
     private val settingsRepository = mockk<SettingsRepository>()
     private val pinRepository = mockk<PinRepository>()
-    private val useCase = SetGracePeriodEnabledUseCase(settingsRepository, pinRepository)
+    private val useCase = SetGracePeriodEnabledUseCase(settingsRepository, pinRepository, clock)
 
     @Test
     fun `sets the flag when PIN is disabled`() =

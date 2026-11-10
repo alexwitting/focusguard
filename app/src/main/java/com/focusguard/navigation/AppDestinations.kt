@@ -1,9 +1,9 @@
 package com.focusguard.navigation
 
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.DateRange
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.BarChart
+import androidx.compose.material.icons.outlined.Block
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.ui.graphics.vector.ImageVector
 import kotlinx.serialization.Serializable
 
@@ -23,7 +23,7 @@ data class TopLevelDestination(
 
 val TOP_LEVEL_DESTINATIONS =
     listOf(
-        TopLevelDestination(HomeRoute, Icons.Default.DateRange, "Home"),
-        TopLevelDestination(BlockRoute, Icons.Default.Lock, "Block"),
-        TopLevelDestination(SettingsRoute, Icons.Default.Settings, "Settings"),
+        TopLevelDestination(HomeRoute, Icons.Outlined.BarChart, "Today"),
+        TopLevelDestination(BlockRoute, Icons.Outlined.Block, "Block"),
+        TopLevelDestination(SettingsRoute, Icons.Outlined.Tune, "Settings"),
     )

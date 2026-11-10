@@ -87,11 +87,19 @@ class AppBlockingEngineTest {
     }
 
     @Test
-    fun `ScheduledBlock with midnight-crossing window allows after midnight`() {
-        // window 22:00–06:00 on Monday — 02:00 Monday should be allowed
+    fun `ScheduledBlock with midnight-crossing window allows after midnight on the following day`() {
+        // Monday 22:00–06:00 runs into Tuesday morning — 02:00 Tuesday is still Monday night.
+        val window = TimeWindow(22, 0, 6, 0, setOf(DayOfWeek.MONDAY))
+        val result = engine.decide(rule(BlockingStrategy.ScheduledBlock(listOf(window))), monday(2, 0).plusDays(1), 0)
+        assertEquals(BlockDecision.Allow, result)
+    }
+
+    @Test
+    fun `ScheduledBlock with midnight-crossing window blocks the early hours of its own start day`() {
+        // 02:00 Monday belongs to Sunday night's window, which isn't selected.
         val window = TimeWindow(22, 0, 6, 0, setOf(DayOfWeek.MONDAY))
         val result = engine.decide(rule(BlockingStrategy.ScheduledBlock(listOf(window))), monday(2, 0), 0)
-        assertEquals(BlockDecision.Allow, result)
+        assertEquals(BlockDecision.Block(BlockReason.OUTSIDE_ALLOWED_WINDOW), result)
     }
 
     @Test
@@ -135,6 +143,62 @@ class AppBlockingEngineTest {
     }
 
     // --- helpers ---
+
+    // --- Bedtime ---
+
+    @Test
+    fun `bedtime blocks every enabled rule inside the window, whatever its strategy`() {
+        val bedtime = TimeWindow(22, 0, 7, 0)
+        val limit = rule(BlockingStrategy.TimeLimit(60))
+        assertEquals(BlockDecision.Block(BlockReason.BEDTIME), engine.decide(limit, monday(23, 30), 0, bedtime))
+        assertEquals(BlockDecision.Block(BlockReason.BEDTIME), engine.decide(limit, monday(6, 0), 0, bedtime))
+    }
+
+    @Test
+    fun `outside bedtime the rule's own strategy decides`() {
+        val bedtime = TimeWindow(22, 0, 7, 0)
+        assertEquals(BlockDecision.Allow, engine.decide(rule(BlockingStrategy.TimeLimit(60)), monday(12, 0), 10, bedtime))
+        assertEquals(
+            BlockDecision.Block(BlockReason.ALWAYS_BLOCKED),
+            engine.decide(rule(BlockingStrategy.AlwaysBlock), monday(12, 0), 0, bedtime),
+        )
+    }
+
+    @Test
+    fun `bedtime never blocks a disabled rule`() {
+        val bedtime = TimeWindow(22, 0, 7, 0)
+        assertEquals(BlockDecision.Allow, engine.decide(rule(BlockingStrategy.AlwaysBlock, enabled = false), monday(23, 0), 0, bedtime))
+    }
+
+    // --- nextBlock (blocks that start while the app is open) ---
+
+    @Test
+    fun `nextBlock finds when an allowed-hours window closes`() {
+        val window = TimeWindow(9, 0, 17, 0, setOf(DayOfWeek.MONDAY))
+        val next = engine.nextBlock(rule(BlockingStrategy.ScheduledBlock(listOf(window))), monday(16, 30).plusSeconds(20), null)
+        // Allowed through 17:00 inclusive, blocked from 17:01.
+        assertEquals(
+            java.time.Duration
+                .ofMinutes(31)
+                .minusSeconds(20),
+            next?.delay,
+        )
+        assertEquals(BlockReason.OUTSIDE_ALLOWED_WINDOW, next?.reason)
+    }
+
+    @Test
+    fun `nextBlock finds bedtime starting for a time-limited app`() {
+        val bedtime = TimeWindow(22, 0, 7, 0)
+        val next = engine.nextBlock(rule(BlockingStrategy.TimeLimit(60)), monday(21, 45), bedtime)
+        assertEquals(java.time.Duration.ofMinutes(15), next?.delay)
+        assertEquals(BlockReason.BEDTIME, next?.reason)
+    }
+
+    @Test
+    fun `nextBlock is null when nothing blocks within the horizon`() {
+        assertEquals(null, engine.nextBlock(rule(BlockingStrategy.TimeLimit(60)), monday(12, 0), null))
+        assertEquals(null, engine.nextBlock(rule(BlockingStrategy.AlwaysBlock, enabled = false), monday(12, 0), null))
+    }
 
     private fun rule(
         strategy: BlockingStrategy,

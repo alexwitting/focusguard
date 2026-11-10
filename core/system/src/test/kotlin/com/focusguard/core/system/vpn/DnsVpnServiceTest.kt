@@ -2,6 +2,7 @@ package com.focusguard.core.system.vpn
 
 import android.app.NotificationManager
 import android.content.Context
+import android.content.Intent
 import android.os.ParcelFileDescriptor
 import com.focusguard.core.domain.model.WebBlockRule
 import com.focusguard.core.system.engine.ContentFilterEngine
@@ -14,6 +15,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -178,6 +180,35 @@ class DnsVpnServiceTest {
         val response = handlePacket(packet)
 
         assertNull(response)
+    }
+
+    @Test
+    fun `a second start command while the tunnel is up doesn't open another one`() {
+        val existing = mockk<ParcelFileDescriptor>(relaxed = true)
+        setTunInterface(existing)
+
+        val result = service.onStartCommand(Intent(), 0, 1)
+
+        assertEquals(android.app.Service.START_STICKY, result)
+        assertSame(existing, getTunInterface())
+    }
+
+    @Test
+    fun `handlePacket ignores a DNS payload it can't parse`() {
+        val packet = buildDnsQueryPacket("example.com")
+        // Corrupt the DNS section so dnsjava can't parse it.
+        for (i in 28 until packet.size) packet[i] = 0xFF.toByte()
+
+        assertNull(handlePacket(packet))
+    }
+
+    @Test
+    fun `handlePacket ignores a DNS message with no question`() {
+        val noQuestion = Message().toWire()
+        val packet = buildDnsQueryPacket("example.com").copyOf(28 + noQuestion.size)
+        System.arraycopy(noQuestion, 0, packet, 28, noQuestion.size)
+
+        assertNull(handlePacket(packet))
     }
 
     @Test

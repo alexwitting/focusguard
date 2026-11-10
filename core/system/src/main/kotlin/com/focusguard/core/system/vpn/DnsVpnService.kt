@@ -13,13 +13,17 @@ import com.focusguard.core.system.engine.DnsFilterEngine
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.xbill.DNS.Flags
 import org.xbill.DNS.Message
@@ -27,6 +31,7 @@ import org.xbill.DNS.Rcode
 import org.xbill.DNS.Section
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -44,6 +49,15 @@ class DnsVpnService : android.net.VpnService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val rulesCache = AtomicReference<List<WebBlockRule>>(emptyList())
     private var tunInterface: ParcelFileDescriptor? = null
+
+    /** Everything one running tunnel owns, so stopping it doesn't kill the whole service scope. */
+    private var sessionJob: Job? = null
+
+    /** Caps in-flight upstream lookups; each can wait up to the socket timeout. */
+    private val inFlightQueries = Semaphore(MAX_IN_FLIGHT_QUERIES)
+
+    /** One writer at a time on the tunnel's output stream. */
+    private val writeLock = Mutex()
 
     override fun onStartCommand(
         intent: Intent?,
@@ -69,18 +83,12 @@ class DnsVpnService : android.net.VpnService() {
     }
 
     private fun startVpn() {
-        startForeground(NOTIFICATION_ID, buildNotification())
+        // onStartCommand runs again for every start request (Settings' "Start" while already
+        // running, a sticky restart). Establishing a second tunnel here used to leak the first
+        // one and leave two read loops competing for packets.
+        if (tunInterface != null) return
 
-        serviceScope.launch {
-            combine(
-                webBlockRuleRepository.getWebBlockRules(),
-                webBlockRuleRepository.getContentFilters(),
-            ) { webRules, activeFilters ->
-                webRules.filter { it.enabled } + contentFilterEngine.dnsRulesFor(activeFilters)
-            }.collect { combinedRules ->
-                rulesCache.set(combinedRules)
-            }
-        }
+        startForeground(NOTIFICATION_ID, buildNotification())
 
         // establish() can throw (e.g. SecurityException under another app's always-on/lockdown
         // VPN, or if consent is revoked between VpnService.prepare() and this call) as well as
@@ -94,47 +102,77 @@ class DnsVpnService : android.net.VpnService() {
                     .addDnsServer(DNS_INTERCEPT)
                     .addRoute(DNS_INTERCEPT, 32)
                     .setMtu(1500)
-                    .setBlocking(false)
+                    // Blocking reads: the loop sleeps in read() until a packet arrives, instead
+                    // of polling a non-blocking fd every few milliseconds all day.
+                    .setBlocking(true)
                     .setSession("FocusGuard")
                     .establish()
             }.onFailure { Log.e(TAG, "VPN establish() failed", it) }.getOrNull()
 
         if (pfd == null) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return
         }
         tunInterface = pfd
 
-        serviceScope.launch { runDnsLoop(pfd) }
+        val session = SupervisorJob(serviceScope.coroutineContext[Job])
+        sessionJob = session
+        val sessionScope = CoroutineScope(serviceScope.coroutineContext + session)
+        sessionScope.launch {
+            combine(
+                webBlockRuleRepository.getWebBlockRules(),
+                webBlockRuleRepository.getContentFilters(),
+            ) { webRules, activeFilters ->
+                webRules.filter { it.enabled } + contentFilterEngine.dnsRulesFor(activeFilters)
+            }.catch { Log.e(TAG, "Loading block rules failed", it) }
+                .collect { combinedRules -> rulesCache.set(combinedRules) }
+        }
+        sessionScope.launch { runDnsLoop(pfd, sessionScope) }
     }
 
     private fun stopVpn() {
-        serviceScope.cancel()
+        sessionJob?.cancel()
+        sessionJob = null
+        // Closing the fd also unblocks the read loop, which exits on the resulting IOException.
         tunInterface?.close()
         tunInterface = null
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
-    private suspend fun runDnsLoop(pfd: ParcelFileDescriptor) {
+    /**
+     * Reads packets until the tunnel closes. Each DNS query is answered on its own coroutine:
+     * forwarding can wait up to the upstream timeout, and handling them one at a time meant a
+     * single slow lookup stalled every other page load behind it.
+     */
+    private suspend fun runDnsLoop(
+        pfd: ParcelFileDescriptor,
+        scope: CoroutineScope,
+    ) {
         val inStream = FileInputStream(pfd.fileDescriptor)
         val outStream = FileOutputStream(pfd.fileDescriptor)
-        val buffer = ByteArray(32767)
+        val buffer = ByteArray(MAX_PACKET_SIZE)
 
         while (currentCoroutineContext().isActive) {
             val len =
-                withContext(Dispatchers.IO) {
-                    runCatching { inStream.read(buffer) }.getOrElse { -1 }
+                try {
+                    inStream.read(buffer)
+                } catch (e: IOException) {
+                    // The tunnel was closed (stopVpn / onRevoke) — normal shutdown.
+                    Log.d(TAG, "Tunnel read ended", e)
+                    return
                 }
-            if (len <= 0) {
-                delay(5)
-                continue
-            }
+            if (len <= 0) continue
 
-            val response = handlePacket(buffer.copyOf(len))
-            if (response != null) {
-                withContext(Dispatchers.IO) {
-                    runCatching { outStream.write(response) }
+            val packet = buffer.copyOf(len)
+            inFlightQueries.acquire()
+            scope.launch {
+                try {
+                    val response = handlePacket(packet) ?: return@launch
+                    writeLock.withLock { runCatching { outStream.write(response) } }
+                } finally {
+                    inFlightQueries.release()
                 }
             }
         }
@@ -275,5 +313,7 @@ class DnsVpnService : android.net.VpnService() {
         private const val VPN_ADDRESS = "10.111.222.1"
         private const val DNS_INTERCEPT = "10.111.222.2"
         private const val UPSTREAM_DNS = "1.1.1.1"
+        private const val MAX_PACKET_SIZE = 32767
+        private const val MAX_IN_FLIGHT_QUERIES = 32
     }
 }

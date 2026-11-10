@@ -107,6 +107,8 @@ class UsageRepositoryImpl
             }
         }
 
+        override suspend fun pruneBefore(date: LocalDate) = usageDao.pruneBefore(date.toEpochDay())
+
         private fun getAppLabel(packageName: String): String =
             try {
                 val appInfo = packageManager.getApplicationInfo(packageName, 0)

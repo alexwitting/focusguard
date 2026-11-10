@@ -1,8 +1,10 @@
 package com.focusguard.feature.settings
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.focusguard.core.domain.model.PermissionsHealth
+import com.focusguard.core.domain.model.PinAttemptResult
 import com.focusguard.core.domain.model.SystemHealth
 import com.focusguard.core.domain.model.TimeWindow
 import com.focusguard.core.domain.usecase.pin.DisablePinUseCase
@@ -11,9 +13,12 @@ import com.focusguard.core.domain.usecase.pin.SetPinUseCase
 import com.focusguard.core.domain.usecase.pin.VerifyPinUseCase
 import com.focusguard.core.domain.usecase.settings.EnableWebContentBlockingUseCase
 import com.focusguard.core.domain.usecase.settings.GetBedtimeUseCase
+import com.focusguard.core.domain.usecase.settings.GetGracePeriodEnabledUseCase
 import com.focusguard.core.domain.usecase.settings.GetSystemHealthUseCase
 import com.focusguard.core.domain.usecase.settings.GetWebContentBlockingEnabledUseCase
 import com.focusguard.core.domain.usecase.settings.SetBedtimeUseCase
+import com.focusguard.core.domain.usecase.settings.SetGracePeriodEnabledUseCase
+import com.focusguard.core.ui.errorMessage
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -23,6 +28,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -41,6 +47,8 @@ class SettingsViewModel
         private val getPinEnabled: GetPinEnabledUseCase,
         private val getWebContentBlockingEnabled: GetWebContentBlockingEnabledUseCase,
         private val enableWebContentBlocking: EnableWebContentBlockingUseCase,
+        private val getGracePeriodEnabled: GetGracePeriodEnabledUseCase,
+        private val setGracePeriodEnabled: SetGracePeriodEnabledUseCase,
     ) : ViewModel() {
         private val _state = MutableStateFlow(SettingsState())
         val state: StateFlow<SettingsState> = _state.asStateFlow()
@@ -51,24 +59,34 @@ class SettingsViewModel
         init {
             viewModelScope.launch {
                 combine(
-                    getSystemHealth.observeSystemHealth(),
-                    getSystemHealth.observePermissionsHealth(),
-                    getPinEnabled(),
-                    getBedtime(),
-                    getWebContentBlockingEnabled(),
-                    ::SettingsScreenData,
-                ).collect { data ->
-                    _state.update {
-                        it.copy(
-                            systemHealth = data.health,
-                            permissions = data.permissions,
-                            isPinEnabled = data.pinEnabled,
-                            bedtime = data.bedtime,
-                            webContentBlockingEnabled = data.webContentBlockingEnabled,
-                            isLoading = false,
-                        )
+                    combine(
+                        getSystemHealth.observeSystemHealth(),
+                        getSystemHealth.observePermissionsHealth(),
+                        getPinEnabled(),
+                        getBedtime(),
+                        getWebContentBlockingEnabled(),
+                        ::SettingsScreenData,
+                    ),
+                    getGracePeriodEnabled(),
+                ) { data, gracePeriod -> data to gracePeriod }
+                    // An uncaught exception here would end this flow for good and freeze the
+                    // screen on stale data (see CLAUDE.md, Error handling).
+                    .catch { e ->
+                        Log.e(TAG, "Failed to load settings", e)
+                        _state.update { it.copy(isLoading = false) }
+                    }.collect { (data, gracePeriod) ->
+                        _state.update {
+                            it.copy(
+                                systemHealth = data.health,
+                                permissions = data.permissions,
+                                isPinEnabled = data.pinEnabled,
+                                bedtime = data.bedtime,
+                                webContentBlockingEnabled = data.webContentBlockingEnabled,
+                                gracePeriodEnabled = gracePeriod,
+                                isLoading = false,
+                            )
+                        }
                     }
-                }
             }
         }
 
@@ -111,8 +129,10 @@ class SettingsViewModel
 
                 SettingsIntent.SubmitPin -> handleSubmitPin()
 
-                SettingsIntent.DismissPinDialog ->
+                SettingsIntent.DismissPinDialog -> {
+                    newPinDraft = null
                     _state.update { it.copy(pinStep = PinStep.Hidden, pinInput = "", pinError = null, pendingToken = null) }
+                }
 
                 SettingsIntent.ShowBedtimeDialog -> {
                     val existing = _state.value.bedtime
@@ -151,6 +171,31 @@ class SettingsViewModel
                 SettingsIntent.ClearBedtime -> handleClearBedtime()
 
                 SettingsIntent.EnableWebContentBlocking -> handleEnableWebContentBlocking()
+
+                is SettingsIntent.SetGracePeriodEnabled -> handleSetGracePeriod(intent.enabled)
+            }
+        }
+
+        /** The first entry of a new PIN, held only until it's re-typed on [PinStep.ConfirmNew]. */
+        private var newPinDraft: String? = null
+
+        /** Pending value for a PIN-gated grace-period change; read back once the PIN checks out. */
+        private var pendingGracePeriod: Boolean? = null
+
+        private fun handleSetGracePeriod(enabled: Boolean) {
+            if (_state.value.isPinEnabled) {
+                pendingGracePeriod = enabled
+                _state.update {
+                    it.copy(pinStep = PinStep.VerifyOld, pendingPinAction = PinAction.SetGracePeriod, pinInput = "", pinError = null)
+                }
+                return
+            }
+            viewModelScope.launch {
+                runCatching { setGracePeriodEnabled(enabled, null) }
+                    .onFailure {
+                        Log.e(TAG, "Failed to change extension setting", it)
+                        emit(SettingsEffect.ShowSnackbar("Couldn't change the extension setting"))
+                    }
             }
         }
 
@@ -192,9 +237,10 @@ class SettingsViewModel
             viewModelScope.launch {
                 when (s.pinStep) {
                     PinStep.VerifyOld -> {
-                        val token = verifyPin(pin)
+                        val result = verifyPin(pin)
+                        val token = (result as? PinAttemptResult.Success)?.token
                         if (token == null) {
-                            _state.update { it.copy(pinError = "Incorrect PIN", pinInput = "") }
+                            _state.update { it.copy(pinError = result.errorMessage(), pinInput = "") }
                         } else {
                             when (s.pendingPinAction) {
                                 PinAction.Disable -> {
@@ -214,6 +260,13 @@ class SettingsViewModel
                                     }.onSuccess { _state.update { it.copy(pinStep = PinStep.Hidden, pinInput = "", pendingToken = null, showBedtimeDialog = false) } }
                                         .onFailure { emit(SettingsEffect.ShowSnackbar(it.message ?: "Failed to save bedtime")) }
                                 }
+                                PinAction.SetGracePeriod -> {
+                                    val enabled = pendingGracePeriod ?: !s.gracePeriodEnabled
+                                    pendingGracePeriod = null
+                                    runCatching { setGracePeriodEnabled(enabled, token) }
+                                        .onSuccess { _state.update { it.copy(pinStep = PinStep.Hidden, pinInput = "", pendingToken = null) } }
+                                        .onFailure { emit(SettingsEffect.ShowSnackbar("Couldn't change the extension setting")) }
+                                }
                                 PinAction.ClearBedtime -> {
                                     runCatching { setBedtime(null, token) }
                                         .onSuccess { _state.update { it.copy(pinStep = PinStep.Hidden, pinInput = "", pendingToken = null) } }
@@ -223,15 +276,35 @@ class SettingsViewModel
                         }
                     }
 
-                    PinStep.EnterNew -> {
-                        runCatching { setPin(pin) }
-                            .onSuccess { _state.update { it.copy(pinStep = PinStep.Hidden, pinInput = "", pendingToken = null) } }
-                            .onFailure { emit(SettingsEffect.ShowSnackbar(it.message ?: "Failed to set PIN")) }
-                    }
+                    PinStep.EnterNew, PinStep.ConfirmNew -> handleNewPinEntry(s.pinStep, pin)
 
                     PinStep.Hidden -> Unit
                 }
             }
+        }
+
+        /** First entry of a new PIN, then its confirmation; only a matching pair is saved. */
+        private suspend fun handleNewPinEntry(
+            step: PinStep,
+            pin: String,
+        ) {
+            if (step == PinStep.EnterNew) {
+                newPinDraft = pin
+                _state.update { it.copy(pinStep = PinStep.ConfirmNew, pinInput = "", pinError = null) }
+                return
+            }
+            val draft = newPinDraft
+            newPinDraft = null
+            if (pin != draft) {
+                _state.update { it.copy(pinStep = PinStep.EnterNew, pinInput = "", pinError = "PINs didn't match, try again") }
+                return
+            }
+            runCatching { setPin(pin) }
+                .onSuccess { _state.update { it.copy(pinStep = PinStep.Hidden, pinInput = "", pendingToken = null) } }
+                .onFailure {
+                    _state.update { it.copy(pinStep = PinStep.EnterNew, pinInput = "") }
+                    emit(SettingsEffect.ShowSnackbar(it.message ?: "Failed to set PIN"))
+                }
         }
 
         private fun handleSaveBedtime() {
@@ -265,4 +338,8 @@ class SettingsViewModel
         }
 
         private suspend fun emit(effect: SettingsEffect) = _effects.emit(effect)
+
+        private companion object {
+            const val TAG = "SettingsViewModel"
+        }
     }

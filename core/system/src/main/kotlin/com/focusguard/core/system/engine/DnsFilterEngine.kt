@@ -23,7 +23,9 @@ class DnsFilterEngine
             hostname: String,
             rule: WebBlockRule,
         ): Boolean {
-            if (hostname == rule.domain) return true
+            // "www." is the same site to a person: a rule for x.com with subdomains off still
+            // has to catch www.x.com, which is what browsers usually load.
+            if (hostname == rule.domain || hostname == "www.${rule.domain}") return true
             if (rule.blockSubdomains && hostname.endsWith(".${rule.domain}")) return true
             return false
         }

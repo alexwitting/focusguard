@@ -11,6 +11,8 @@ data class SettingsState(
     val permissions: PermissionsHealth = PermissionsHealth(false, false, false, false, false),
     val isPinEnabled: Boolean = false,
     val webContentBlockingEnabled: Boolean = false,
+    /** Whether the time-limit block screen may offer one extension per app per day. */
+    val gracePeriodEnabled: Boolean = false,
     val isEnablingWebContentBlocking: Boolean = false,
     val bedtime: TimeWindow? = null,
     val isLoading: Boolean = true,
@@ -25,9 +27,10 @@ data class SettingsState(
     val bedtimeEdit: BedtimeEdit = BedtimeEdit(),
 )
 
-enum class PinStep { Hidden, VerifyOld, EnterNew }
+/** ConfirmNew: a new PIN is typed twice, so one typo can't lock you out of your own rules. */
+enum class PinStep { Hidden, VerifyOld, EnterNew, ConfirmNew }
 
-enum class PinAction { None, Change, Disable, SaveBedtime, ClearBedtime }
+enum class PinAction { None, Change, Disable, SaveBedtime, ClearBedtime, SetGracePeriod }
 
 data class BedtimeEdit(
     val startHour: Int = 22,
@@ -75,6 +78,11 @@ sealed interface SettingsIntent {
     data object SaveBedtime : SettingsIntent
 
     data object ClearBedtime : SettingsIntent
+
+    // Time-limit extension (grace period)
+    data class SetGracePeriodEnabled(
+        val enabled: Boolean,
+    ) : SettingsIntent
 
     // Website content blocking — enable-only, no corresponding "disable" intent.
     data object EnableWebContentBlocking : SettingsIntent

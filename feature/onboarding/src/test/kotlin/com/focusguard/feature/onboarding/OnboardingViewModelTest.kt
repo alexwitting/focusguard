@@ -193,6 +193,41 @@ class OnboardingViewModelTest {
         }
 
     @Test
+    fun `onOpenAppInfo sends OpenAppDetailsSettings without changing the step`() =
+        runTest {
+            val viewModel = createViewModel()
+            viewModel.onNext() // -> ACCESSIBILITY
+
+            viewModel.effects.test {
+                viewModel.onOpenAppInfo()
+                assertEquals(OnboardingEffect.OpenAppDetailsSettings, awaitItem())
+            }
+            assertEquals(OnboardingStep.ACCESSIBILITY, viewModel.state.value.step)
+        }
+
+    @Test
+    fun `isGranted on state matches each step's permission flag`() {
+        val state =
+            OnboardingState(
+                health =
+                    PermissionsHealth(
+                        accessibilityEnabled = true,
+                        vpnPrepared = false,
+                        usageStatsGranted = true,
+                        batteryOptimizationIgnored = false,
+                        exactAlarmAllowed = true,
+                    ),
+            )
+        assertTrue(state.isGranted(OnboardingStep.ACCESSIBILITY))
+        assertFalse(state.isGranted(OnboardingStep.VPN))
+        assertTrue(state.isGranted(OnboardingStep.USAGE_ACCESS))
+        assertFalse(state.isGranted(OnboardingStep.BATTERY))
+        assertTrue(state.isGranted(OnboardingStep.EXACT_ALARM))
+        assertTrue(state.isGranted(OnboardingStep.WELCOME))
+        assertTrue(state.isGranted(OnboardingStep.DONE))
+    }
+
+    @Test
     fun `onGrant sends the matching effect for every grantable step reachable under test`() =
         runTest {
             // EXACT_ALARM is intentionally excluded: it's only reachable when

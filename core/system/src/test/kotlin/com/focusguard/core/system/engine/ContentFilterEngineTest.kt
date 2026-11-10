@@ -199,13 +199,16 @@ class ContentFilterEngineTest {
     }
 
     @Test
-    fun `dnsRulesFor Reels contains expected CDN hostnames`() {
-        val rules = engine.dnsRulesFor(setOf(ContentFilter.REELS))
-        val domains = rules.map { it.domain }
-        assert("i.instagram.com" in domains)
-        assert("scontent.cdninstagram.com" in domains)
-        assert(rules.all { it.enabled })
-        assert(rules.all { !it.blockSubdomains })
+    fun `dnsRulesFor Reels blocks nothing at DNS, since Instagram's hosts serve the whole app`() {
+        val domains = engine.dnsRulesFor(setOf(ContentFilter.REELS)).map { it.domain }
+        assertEquals(emptyList<String>(), domains)
+    }
+
+    @Test
+    fun `no content filter ever DNS-blocks Instagram's core API or media hosts`() {
+        val domains = engine.dnsRulesFor(ContentFilter.entries.toSet()).map { it.domain }
+        assert(domains.none { it.endsWith("instagram.com") || it.endsWith("cdninstagram.com") })
+        assert(engine.dnsRulesFor(ContentFilter.entries.toSet()).all { it.enabled && !it.blockSubdomains })
     }
 
     @Test

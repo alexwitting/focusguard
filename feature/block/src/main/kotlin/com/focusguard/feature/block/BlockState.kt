@@ -17,7 +17,18 @@ data class BlockState(
     val pinInput: String = "",
     val pinError: String? = null,
     val usageByPackage: Map<String, Int> = emptyMap(),
+    /** The accessibility service's browser scan — the main way websites get blocked. */
+    val browserScanEnabled: Boolean = false,
+    // Optimistic until the first health reading, so the "not blocked" prompt can't flash on load.
+    val vpnActive: Boolean = true,
 ) {
+    /**
+     * Websites are on the list but nothing is set up to block them: the browser scan is off and
+     * the optional VPN isn't running. Rules would otherwise sit there silently doing nothing.
+     */
+    val websitesUnprotected: Boolean
+        get() = !isLoading && webRules.any { it.enabled } && !browserScanEnabled && !vpnActive
+
     val filteredApps: List<AppWithRule>
         get() =
             if (searchQuery.isBlank()) {
@@ -81,6 +92,9 @@ sealed interface BlockIntent {
     data object SubmitPin : BlockIntent
 
     data object DismissPinDialog : BlockIntent
+
+    /** Turns on the browser scan. Tightens blocking, so it needs no PIN. */
+    data object EnableBrowserScan : BlockIntent
 }
 
 sealed interface BlockEffect {

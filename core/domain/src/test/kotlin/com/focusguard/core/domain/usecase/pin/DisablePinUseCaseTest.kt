@@ -2,6 +2,7 @@ package com.focusguard.core.domain.usecase.pin
 
 import com.focusguard.core.domain.model.PinVerificationToken
 import com.focusguard.core.domain.repository.PinRepository
+import com.focusguard.core.domain.time.TestClock
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
@@ -13,8 +14,9 @@ import java.time.Duration
 import java.time.Instant
 
 class DisablePinUseCaseTest {
+    private val clock = TestClock()
     private val repository = mockk<PinRepository>()
-    private val useCase = DisablePinUseCase(repository)
+    private val useCase = DisablePinUseCase(repository, clock)
 
     @Test
     fun `disables PIN when token is valid`() =

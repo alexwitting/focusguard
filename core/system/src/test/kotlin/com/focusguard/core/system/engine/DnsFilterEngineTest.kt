@@ -23,7 +23,14 @@ class DnsFilterEngineTest {
     @Test
     fun `subdomain allows when blockSubdomains is false`() {
         val rules = listOf(rule("instagram.com", blockSubdomains = false))
-        assertFalse(engine.shouldBlock("www.instagram.com", rules))
+        assertFalse(engine.shouldBlock("m.instagram.com", rules))
+    }
+
+    @Test
+    fun `www counts as the same site even when blockSubdomains is false`() {
+        val rules = listOf(WebBlockRule(domain = "instagram.com", blockSubdomains = false))
+        assertTrue(engine.shouldBlock("www.instagram.com", rules))
+        assertFalse(engine.shouldBlock("www2.instagram.com", rules))
     }
 
     @Test
