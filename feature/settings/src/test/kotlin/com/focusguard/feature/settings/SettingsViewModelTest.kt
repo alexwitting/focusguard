@@ -10,9 +10,12 @@ import com.focusguard.core.domain.usecase.pin.SetPinUseCase
 import com.focusguard.core.domain.usecase.pin.VerifyPinUseCase
 import com.focusguard.core.domain.usecase.settings.EnableWebContentBlockingUseCase
 import com.focusguard.core.domain.usecase.settings.GetBedtimeUseCase
+import com.focusguard.core.domain.usecase.settings.GetGracePeriodEnabledUseCase
 import com.focusguard.core.domain.usecase.settings.GetSystemHealthUseCase
 import com.focusguard.core.domain.usecase.settings.GetWebContentBlockingEnabledUseCase
 import com.focusguard.core.domain.usecase.settings.SetBedtimeUseCase
+import com.focusguard.core.domain.usecase.settings.SetGracePeriodEnabledUseCase
+import com.focusguard.core.testing.FakeClockProvider
 import com.focusguard.core.testing.FakePinRepository
 import com.focusguard.core.testing.FakeSettingsRepository
 import com.focusguard.core.testing.FakeSystemHealthRepository
@@ -20,6 +23,7 @@ import com.focusguard.core.testing.MainDispatcherExtension
 import io.mockk.coEvery
 import io.mockk.mockk
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -47,18 +51,52 @@ class SettingsViewModelTest {
         setBedtimeOverride: SetBedtimeUseCase? = null,
         disablePinOverride: DisablePinUseCase? = null,
         setPinOverride: SetPinUseCase? = null,
+        enableWebContentBlockingOverride: EnableWebContentBlockingUseCase? = null,
     ): SettingsViewModel =
         SettingsViewModel(
             getSystemHealth = GetSystemHealthUseCase(systemHealthRepository),
             getBedtime = GetBedtimeUseCase(settingsRepository),
-            setBedtime = setBedtimeOverride ?: SetBedtimeUseCase(settingsRepository, pinRepository),
-            verifyPin = VerifyPinUseCase(pinRepository),
+            setBedtime = setBedtimeOverride ?: SetBedtimeUseCase(settingsRepository, pinRepository, FakeClockProvider()),
+            verifyPin = VerifyPinUseCase(pinRepository, FakeClockProvider()),
             setPin = setPinOverride ?: SetPinUseCase(pinRepository),
-            disablePin = disablePinOverride ?: DisablePinUseCase(pinRepository),
+            disablePin = disablePinOverride ?: DisablePinUseCase(pinRepository, FakeClockProvider()),
             getPinEnabled = GetPinEnabledUseCase(pinRepository),
             getWebContentBlockingEnabled = GetWebContentBlockingEnabledUseCase(settingsRepository),
-            enableWebContentBlocking = EnableWebContentBlockingUseCase(settingsRepository),
+            enableWebContentBlocking = enableWebContentBlockingOverride ?: EnableWebContentBlockingUseCase(settingsRepository),
+            getGracePeriodEnabled = GetGracePeriodEnabledUseCase(settingsRepository),
+            setGracePeriodEnabled = SetGracePeriodEnabledUseCase(settingsRepository, pinRepository, FakeClockProvider()),
         )
+
+    @Test
+    fun `turning on the extension without a PIN saves it straight away`() =
+        runTest {
+            val viewModel = createViewModel()
+
+            viewModel.onIntent(SettingsIntent.SetGracePeriodEnabled(true))
+            advanceUntilIdle()
+
+            assertTrue(settingsRepository.isGracePeriodEnabled().first())
+            assertTrue(viewModel.state.value.gracePeriodEnabled)
+        }
+
+    @Test
+    fun `turning on the extension with a PIN set asks for the PIN first, then saves`() =
+        runTest {
+            pinRepository.setPin("123456")
+            val viewModel = createViewModel()
+            advanceUntilIdle()
+
+            viewModel.onIntent(SettingsIntent.SetGracePeriodEnabled(true))
+            assertEquals(PinStep.VerifyOld, viewModel.state.value.pinStep)
+            assertFalse(settingsRepository.isGracePeriodEnabled().first())
+
+            viewModel.onIntent(SettingsIntent.PinInputChanged("123456"))
+            viewModel.onIntent(SettingsIntent.SubmitPin)
+            advanceUntilIdle()
+
+            assertTrue(settingsRepository.isGracePeriodEnabled().first())
+            assertEquals(PinStep.Hidden, viewModel.state.value.pinStep)
+        }
 
     @Test
     fun `setting a PIN via RequestSetPin enables it`() =
@@ -70,9 +108,30 @@ class SettingsViewModelTest {
 
             viewModel.onIntent(SettingsIntent.PinInputChanged("123456"))
             viewModel.onIntent(SettingsIntent.SubmitPin)
+            assertEquals(PinStep.ConfirmNew, viewModel.state.value.pinStep)
+            assertFalse(viewModel.state.value.isPinEnabled)
+
+            viewModel.onIntent(SettingsIntent.PinInputChanged("123456"))
+            viewModel.onIntent(SettingsIntent.SubmitPin)
 
             assertEquals(PinStep.Hidden, viewModel.state.value.pinStep)
             assertTrue(viewModel.state.value.isPinEnabled)
+        }
+
+    @Test
+    fun `a confirmation that doesn't match goes back to choosing a PIN and saves nothing`() =
+        runTest {
+            val viewModel = createViewModel()
+            viewModel.onIntent(SettingsIntent.RequestSetPin)
+            viewModel.onIntent(SettingsIntent.PinInputChanged("123456"))
+            viewModel.onIntent(SettingsIntent.SubmitPin)
+
+            viewModel.onIntent(SettingsIntent.PinInputChanged("123457"))
+            viewModel.onIntent(SettingsIntent.SubmitPin)
+
+            assertEquals(PinStep.EnterNew, viewModel.state.value.pinStep)
+            assertEquals("PINs didn't match, try again", viewModel.state.value.pinError)
+            assertFalse(viewModel.state.value.isPinEnabled)
         }
 
     @Test
@@ -89,6 +148,33 @@ class SettingsViewModelTest {
 
             assertEquals(PinStep.Hidden, viewModel.state.value.pinStep)
             assertFalse(viewModel.state.value.isPinEnabled)
+        }
+
+    @Test
+    fun `repeated wrong PINs lock entry with a clear message`() =
+        runTest {
+            pinRepository.setPin("111111")
+            val viewModel = createViewModel()
+            viewModel.onIntent(SettingsIntent.RequestDisablePin)
+
+            repeat(4) {
+                viewModel.onIntent(SettingsIntent.PinInputChanged("999999"))
+                viewModel.onIntent(SettingsIntent.SubmitPin)
+            }
+            assertEquals("Incorrect PIN · 1 try left", viewModel.state.value.pinError)
+
+            viewModel.onIntent(SettingsIntent.PinInputChanged("999999"))
+            viewModel.onIntent(SettingsIntent.SubmitPin)
+            assertEquals("Too many tries. Try again in 30s", viewModel.state.value.pinError)
+
+            // Even the right PIN is refused during the lockout.
+            viewModel.onIntent(SettingsIntent.PinInputChanged("111111"))
+            viewModel.onIntent(SettingsIntent.SubmitPin)
+            assertTrue(
+                viewModel.state.value.pinError!!
+                    .startsWith("Too many tries"),
+            )
+            assertTrue(viewModel.state.value.isPinEnabled)
         }
 
     @Test
@@ -185,6 +271,8 @@ class SettingsViewModelTest {
             viewModel.onIntent(SettingsIntent.SubmitPin)
             assertEquals(PinStep.EnterNew, viewModel.state.value.pinStep)
 
+            viewModel.onIntent(SettingsIntent.PinInputChanged("222222"))
+            viewModel.onIntent(SettingsIntent.SubmitPin)
             viewModel.onIntent(SettingsIntent.PinInputChanged("222222"))
             viewModel.onIntent(SettingsIntent.SubmitPin)
 
@@ -415,6 +503,8 @@ class SettingsViewModelTest {
             val viewModel = createViewModel(setPinOverride = setPin)
             viewModel.onIntent(SettingsIntent.RequestSetPin)
 
+            viewModel.onIntent(SettingsIntent.PinInputChanged("123456"))
+            viewModel.onIntent(SettingsIntent.SubmitPin)
             viewModel.effects.test {
                 viewModel.onIntent(SettingsIntent.PinInputChanged("123456"))
                 viewModel.onIntent(SettingsIntent.SubmitPin)
@@ -507,5 +597,50 @@ class SettingsViewModelTest {
             viewModel.onIntent(SettingsIntent.EnableWebContentBlocking)
 
             assertTrue(viewModel.state.value.webContentBlockingEnabled)
+        }
+
+    @Test
+    fun `a failed browser-scan enable shows a snackbar and clears the spinner`() =
+        runTest {
+            val failing = mockk<EnableWebContentBlockingUseCase> { coEvery { this@mockk() } throws IllegalStateException("nope") }
+            val viewModel = createViewModel(enableWebContentBlockingOverride = failing)
+
+            viewModel.effects.test {
+                viewModel.onIntent(SettingsIntent.EnableWebContentBlocking)
+                assertEquals(SettingsEffect.ShowSnackbar("nope"), awaitItem())
+            }
+            assertFalse(viewModel.state.value.isEnablingWebContentBlocking)
+        }
+
+    @Test
+    fun `a wrong PIN leaves the extension setting unchanged`() =
+        runTest {
+            pinRepository.setPin("123456")
+            val viewModel = createViewModel()
+            advanceUntilIdle()
+
+            viewModel.onIntent(SettingsIntent.SetGracePeriodEnabled(true))
+            viewModel.onIntent(SettingsIntent.PinInputChanged("000000"))
+            viewModel.onIntent(SettingsIntent.SubmitPin)
+            advanceUntilIdle()
+
+            assertEquals("Incorrect PIN", viewModel.state.value.pinError)
+            assertFalse(settingsRepository.isGracePeriodEnabled().first())
+        }
+
+    @Test
+    fun `turning the extension off also goes through the PIN when one is set`() =
+        runTest {
+            settingsRepository.setGracePeriodEnabled(true)
+            pinRepository.setPin("123456")
+            val viewModel = createViewModel()
+            advanceUntilIdle()
+
+            viewModel.onIntent(SettingsIntent.SetGracePeriodEnabled(false))
+            viewModel.onIntent(SettingsIntent.PinInputChanged("123456"))
+            viewModel.onIntent(SettingsIntent.SubmitPin)
+            advanceUntilIdle()
+
+            assertFalse(settingsRepository.isGracePeriodEnabled().first())
         }
 }

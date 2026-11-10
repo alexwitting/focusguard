@@ -19,14 +19,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Accessibility
@@ -37,27 +39,33 @@ import androidx.compose.material.icons.filled.QueryStats
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.VpnKey
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.Button
-import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.focusguard.core.ui.FocusCard
+import com.focusguard.core.ui.SectionLabel
 
 @Composable
 fun OnboardingScreen(
@@ -109,24 +117,28 @@ fun OnboardingScreen(
                         context.startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM))
                     }
                 }
+
+                OnboardingEffect.OpenAppDetailsSettings ->
+                    context.startActivity(
+                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.parse("package:${context.packageName}")
+                        },
+                    )
             }
         }
     }
 
-    Surface(modifier = modifier.fillMaxSize()) {
+    Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(
             modifier =
                 Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 32.dp, vertical = 48.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .padding(horizontal = 24.dp, vertical = 16.dp),
         ) {
-            StepDots(
-                currentStep = state.step,
-                modifier = Modifier.fillMaxWidth(),
-            )
+            StepProgress(currentStep = state.step)
 
-            Spacer(Modifier.height(48.dp))
+            Spacer(Modifier.height(28.dp))
 
             AnimatedContent(
                 targetState = state.step,
@@ -137,13 +149,16 @@ fun OnboardingScreen(
                 label = "onboarding-step",
                 modifier = Modifier.weight(1f),
             ) { step ->
+                // Derived from `state` for *this* step, so the outgoing page keeps its own
+                // granted flag while it animates away instead of reading the new step's.
                 StepContent(
                     step = step,
-                    isGranted = viewModel.isCurrentStepGranted(),
+                    isGranted = state.isGranted(step),
                     hasAttempted = step in state.attemptedSteps,
                     onGrant = viewModel::onGrant,
                     onNext = viewModel::onNext,
                     onSkip = viewModel::onSkip,
+                    onOpenAppInfo = viewModel::onOpenAppInfo,
                 )
             }
         }
@@ -158,132 +173,233 @@ private fun StepContent(
     onGrant: () -> Unit,
     onNext: () -> Unit,
     onSkip: () -> Unit,
+    onOpenAppInfo: () -> Unit,
 ) {
     val meta = stepMeta(step)
+    val isPermissionStep = step != OnboardingStep.WELCOME && step != OnboardingStep.DONE
 
-    Column(
-        modifier =
-            Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState()),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        // Icon with optional granted badge
-        Box(contentAlignment = Alignment.BottomEnd) {
-            Box(
-                modifier =
-                    Modifier
-                        .size(96.dp)
-                        .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = meta.icon,
-                    contentDescription = null,
-                    modifier = Modifier.size(48.dp),
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                )
+    Column(Modifier.fillMaxSize()) {
+        Column(
+            modifier =
+                Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            StepIcon(icon = meta.icon, granted = isPermissionStep && isGranted)
+
+            Text(text = meta.title, style = MaterialTheme.typography.displaySmall)
+
+            Text(
+                text = meta.description,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            if (meta.privacyNote != null) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(
+                        Icons.Outlined.Shield,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Text(
+                        text = meta.privacyNote,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.secondary,
+                    )
+                }
             }
-            if (isGranted && step != OnboardingStep.WELCOME && step != OnboardingStep.DONE) {
-                Icon(
-                    imageVector = Icons.Default.CheckCircle,
-                    contentDescription = "Granted",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(28.dp),
-                )
+
+            if (isPermissionStep && !isGranted && meta.guide.isNotEmpty()) {
+                Spacer(Modifier.height(4.dp))
+                GuideCard(steps = meta.guide, note = meta.guideNote)
+            }
+
+            // Android 13+ greys out a sideloaded app's accessibility switch as a "restricted
+            // setting". Tapping it shows a dialog and leaves the service off, which reads to the
+            // user as "I enabled it and the app didn't notice". Only the user can lift the
+            // restriction, from App info's overflow menu, so explain that once they've tried.
+            if (needsRestrictedSettingsHelp(step, hasAttempted, isGranted)) {
+                RestrictedSettingHelp(onOpenAppInfo = onOpenAppInfo)
             }
         }
 
-        Spacer(Modifier.height(32.dp))
-
-        Text(
-            text = meta.title,
-            style = MaterialTheme.typography.headlineSmall,
-            textAlign = TextAlign.Center,
+        Spacer(Modifier.height(16.dp))
+        StepActions(
+            step = step,
+            isGranted = isGranted,
+            hasAttempted = hasAttempted,
+            optional = meta.optional,
+            onGrant = onGrant,
+            onNext = onNext,
+            onSkip = onSkip,
         )
+    }
+}
 
+private fun needsRestrictedSettingsHelp(
+    step: OnboardingStep,
+    hasAttempted: Boolean,
+    isGranted: Boolean,
+): Boolean {
+    val restrictedSettingsExist = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+    return restrictedSettingsExist && step == OnboardingStep.ACCESSIBILITY && hasAttempted && !isGranted
+}
+
+@Composable
+private fun StepIcon(
+    icon: ImageVector,
+    granted: Boolean,
+) {
+    Box(contentAlignment = Alignment.BottomEnd) {
+        Box(
+            modifier =
+                Modifier
+                    .size(64.dp)
+                    .clip(MaterialTheme.shapes.extraLarge)
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.size(30.dp),
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+        }
+        if (granted) {
+            Icon(
+                imageVector = Icons.Default.CheckCircle,
+                contentDescription = "Granted",
+                tint = MaterialTheme.colorScheme.secondary,
+                modifier =
+                    Modifier
+                        .size(24.dp)
+                        .background(MaterialTheme.colorScheme.background, CircleShape),
+            )
+        }
+    }
+}
+
+@Composable
+private fun GuideCard(
+    steps: List<String>,
+    note: String?,
+) {
+    FocusCard {
+        SectionLabel("On the next screen")
         Spacer(Modifier.height(12.dp))
-
-        Text(
-            text = meta.description,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
-
-        // How-to guide shown on permission steps once the user has tapped Grant,
-        // or always shown if they haven't tapped yet (so they know what to expect).
-        if (meta.guide.isNotEmpty()) {
-            Spacer(Modifier.height(20.dp))
-            Column(
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .background(
-                            MaterialTheme.colorScheme.surfaceVariant,
-                            RoundedCornerShape(12.dp),
-                        ).padding(16.dp),
-            ) {
-                Text(
-                    text = "How to enable",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = meta.guide,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    lineHeight = MaterialTheme.typography.bodySmall.lineHeight,
-                )
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            steps.forEachIndexed { index, text ->
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Box(
+                        modifier =
+                            Modifier
+                                .size(26.dp)
+                                .background(MaterialTheme.colorScheme.onSurface, CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "${index + 1}",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.surface,
+                        )
+                    }
+                    Text(
+                        text = text,
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
             }
         }
+        if (note != null) {
+            Spacer(Modifier.height(12.dp))
+            Text(
+                text = note,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
 
-        Spacer(Modifier.height(32.dp))
-
-        when (step) {
-            OnboardingStep.WELCOME -> {
-                Button(onClick = onNext, modifier = Modifier.fillMaxWidth()) {
-                    Text("Get started")
-                }
+@Composable
+private fun RestrictedSettingHelp(onOpenAppInfo: () -> Unit) {
+    Surface(
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(Icons.Outlined.Info, contentDescription = null, modifier = Modifier.size(20.dp))
+                Text("Switch greyed out?", style = MaterialTheme.typography.titleMedium)
             }
-
-            OnboardingStep.DONE -> {
-                Button(onClick = onNext, modifier = Modifier.fillMaxWidth()) {
-                    Text("Start using FocusGuard")
-                }
+            Text(
+                text =
+                    "Android blocks this setting for apps installed outside an app store. " +
+                        "Open App info, tap ⋮ in the top corner, choose \"Allow restricted " +
+                        "settings\", then come back and try again.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            OutlinedButton(onClick = onOpenAppInfo) {
+                Text("Open app info")
             }
+        }
+    }
+}
+
+@Composable
+private fun StepActions(
+    step: OnboardingStep,
+    isGranted: Boolean,
+    hasAttempted: Boolean,
+    optional: Boolean,
+    onGrant: () -> Unit,
+    onNext: () -> Unit,
+    onSkip: () -> Unit,
+) {
+    val primaryModifier = Modifier.fillMaxWidth().height(56.dp)
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        when {
+            step == OnboardingStep.WELCOME ->
+                Button(onClick = onNext, modifier = primaryModifier) { Text("Get started") }
+
+            step == OnboardingStep.DONE ->
+                Button(onClick = onNext, modifier = primaryModifier) { Text("Start using FocusGuard") }
+
+            isGranted ->
+                Button(onClick = onNext, modifier = primaryModifier) { Text("Continue") }
 
             else -> {
-                if (isGranted) {
-                    Button(onClick = onNext, modifier = Modifier.fillMaxWidth()) {
-                        Text("Continue")
-                    }
-                } else {
-                    Button(
-                        onClick = onGrant,
-                        modifier = Modifier.fillMaxWidth(),
+                Button(onClick = onGrant, modifier = primaryModifier) {
+                    Text(if (hasAttempted) "Try again" else "Open settings")
+                }
+                // After a first attempt (or on optional steps) offer a way past, so the user is
+                // never stuck on a permission their phone won't grant.
+                if (hasAttempted || optional) {
+                    TextButton(
+                        onClick = if (optional) onSkip else onNext,
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        colors =
+                            ButtonDefaults.textButtonColors(
+                                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            ),
                     ) {
-                        Text(if (hasAttempted) "Try again" else "Grant access")
-                    }
-
-                    // After a first attempt, offer a bypass so the user is never stuck.
-                    if (hasAttempted) {
-                        Spacer(Modifier.height(8.dp))
-                        FilledTonalButton(
-                            onClick = onNext,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text("Continue anyway")
-                        }
-                    }
-
-                    if (meta.optional) {
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedButton(onClick = onSkip, modifier = Modifier.fillMaxWidth()) {
-                            Text("Skip for now")
-                        }
+                        Text(if (optional) "Skip for now" else "Continue anyway")
                     }
                 }
             }
@@ -292,10 +408,7 @@ private fun StepContent(
 }
 
 @Composable
-private fun StepDots(
-    currentStep: OnboardingStep,
-    modifier: Modifier = Modifier,
-) {
+private fun StepProgress(currentStep: OnboardingStep) {
     val allSteps =
         buildList {
             add(OnboardingStep.WELCOME)
@@ -309,29 +422,39 @@ private fun StepDots(
     val currentIndex = allSteps.indexOf(currentStep)
 
     Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.Center,
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .semantics { contentDescription = "Step ${currentIndex + 1} of ${allSteps.size}" },
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        allSteps.forEachIndexed { index, _ ->
-            val active = index == currentIndex
-            val done = index < currentIndex
-            Box(
-                modifier =
-                    Modifier
-                        .padding(horizontal = 4.dp)
-                        .size(if (active) 10.dp else 8.dp)
-                        .background(
-                            color =
+        Row(
+            modifier = Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            allSteps.forEachIndexed { index, _ ->
+                Box(
+                    modifier =
+                        Modifier
+                            .weight(1f)
+                            .height(6.dp)
+                            .clip(CircleShape)
+                            .background(
                                 when {
-                                    active -> MaterialTheme.colorScheme.primary
-                                    done -> MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
-                                    else -> MaterialTheme.colorScheme.outlineVariant
+                                    index < currentIndex -> MaterialTheme.colorScheme.onSurface
+                                    index == currentIndex -> MaterialTheme.colorScheme.primary
+                                    else -> MaterialTheme.colorScheme.surfaceContainerHighest
                                 },
-                            shape = CircleShape,
-                        ),
-            )
+                            ),
+                )
+            }
         }
+        Text(
+            text = "${currentIndex + 1} of ${allSteps.size}",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -339,100 +462,98 @@ private data class StepMeta(
     val icon: ImageVector,
     val title: String,
     val description: String,
-    val guide: String = "",
+    val guide: List<String> = emptyList(),
+    val guideNote: String? = null,
+    val privacyNote: String? = null,
     val optional: Boolean = false,
 )
 
-@Composable
-private fun stepMeta(step: OnboardingStep): StepMeta =
-    when (step) {
-        OnboardingStep.WELCOME ->
+private val STEP_META: Map<OnboardingStep, StepMeta> =
+    mapOf(
+        OnboardingStep.WELCOME to
             StepMeta(
                 icon = Icons.Default.Shield,
                 title = "Take back control",
                 description =
-                    "FocusGuard blocks distracting apps, websites, and short-form content. " +
-                        "We need a few permissions to keep you on track — here's exactly what each one does and how to enable it.",
-            )
-
-        OnboardingStep.ACCESSIBILITY ->
+                    "FocusGuard blocks distracting apps, websites and short-form feeds. " +
+                        "It needs a few permissions to do that — each step explains what one is for.",
+            ),
+        OnboardingStep.ACCESSIBILITY to
             StepMeta(
                 icon = Icons.Default.Accessibility,
-                title = "Accessibility service",
+                title = "Turn on the accessibility service",
                 description =
-                    "Detects which app is in the foreground so FocusGuard can enforce your " +
-                        "block rules in real time. No keyboard input or screen content is ever read.",
+                    "Lets FocusGuard see which app is open so it can block it the moment it appears.",
+                privacyNote = "Never reads what you type",
                 guide =
-                    "1. On the next screen, scroll down to find \"Installed apps\".\n" +
-                        "2. Tap \"FocusGuard\" in the list.\n" +
-                        "3. Enable the toggle at the top.\n" +
-                        "4. Tap \"Allow\" in the confirmation dialog.",
-            )
-
-        OnboardingStep.USAGE_ACCESS ->
+                    listOf(
+                        "Open \"Installed apps\" (or \"Downloaded apps\")",
+                        "Tap FocusGuard",
+                        "Turn the switch on, then tap Allow",
+                    ),
+            ),
+        OnboardingStep.USAGE_ACCESS to
             StepMeta(
                 icon = Icons.Default.QueryStats,
-                title = "Usage access",
+                title = "Allow usage access",
                 description =
-                    "Lets FocusGuard see how much time you spend in each app, so it can " +
-                        "enforce daily time limits and show accurate usage reports.",
+                    "Lets FocusGuard see how long you spend in each app, to enforce daily " +
+                        "limits and build your weekly report.",
+                privacyNote = "Stays on this phone. Nothing is uploaded.",
                 guide =
-                    "1. On the next screen, find \"FocusGuard\" in the app list.\n" +
-                        "2. Tap it.\n" +
-                        "3. Enable \"Permit usage access\".\n\n" +
-                        "Tip: on some phones the list is long — scroll or use the search icon.",
-            )
-
-        OnboardingStep.BATTERY ->
+                    listOf(
+                        "Find FocusGuard in the list",
+                        "Turn on \"Permit usage access\"",
+                        "Press back to return here",
+                    ),
+                guideNote = "The list can be long — use the search icon if you can't see it.",
+            ),
+        OnboardingStep.BATTERY to
             StepMeta(
                 icon = Icons.Default.BatteryFull,
-                title = "Battery optimisation",
+                title = "Keep FocusGuard running",
                 description =
-                    "Prevents Android from sleeping FocusGuard's background services. " +
-                        "Without this, blocking may silently stop working when the screen turns off.",
-                guide =
-                    "A system dialog will appear — tap \"Allow\".\n\n" +
-                        "If no dialog appears, go to:\n" +
-                        "Settings → Battery → Battery optimisation\n" +
-                        "Find FocusGuard and select \"Don't optimise\".",
-            )
-
-        OnboardingStep.VPN ->
+                    "Stops Android putting FocusGuard to sleep. Without this, blocking can " +
+                        "quietly stop when the screen is off.",
+                guide = listOf("Tap Allow in the dialog that appears"),
+                guideNote =
+                    "No dialog? Go to Settings › Battery › Battery optimisation, find " +
+                        "FocusGuard and choose \"Don't optimise\".",
+            ),
+        OnboardingStep.VPN to
             StepMeta(
                 icon = Icons.Default.VpnKey,
-                title = "Website blocking (optional)",
+                title = "Block websites",
                 description =
-                    "Creates a local-only VPN to intercept DNS queries and block websites " +
-                        "and short-form content CDNs. No traffic leaves your device — it never connects " +
-                        "to an external server.",
-                guide =
-                    "A system dialog will appear — tap \"OK\" to allow the local VPN.\n\n" +
-                        "You can revoke this at any time from Settings → VPN.\n" +
-                        "Skip this step if you only want app blocking.",
+                    "Creates a local-only VPN that filters website lookups on this phone. " +
+                        "It never connects to an outside server.",
+                privacyNote = "No traffic leaves your device",
+                guide = listOf("Tap OK in the dialog that appears"),
+                guideNote = "Optional — skip it if you only want to block apps.",
                 optional = true,
-            )
-
-        OnboardingStep.EXACT_ALARM ->
+            ),
+        OnboardingStep.EXACT_ALARM to
             StepMeta(
                 icon = Icons.Default.Schedule,
-                title = "Exact alarms",
+                title = "Allow exact alarms",
                 description =
-                    "Required on Android 12 and above so FocusGuard can fire time-limit " +
-                        "alerts at the precise second your daily allowance runs out.",
+                    "Lets FocusGuard step in at the exact minute a daily limit runs out.",
                 guide =
-                    "1. On the next screen, find \"FocusGuard\" in the app list.\n" +
-                        "2. Tap it.\n" +
-                        "3. Enable \"Allow setting alarms and reminders\".\n\n" +
-                        "Skip this if you don't use daily time limits.",
+                    listOf(
+                        "Find FocusGuard in the list",
+                        "Turn on \"Allow setting alarms and reminders\"",
+                    ),
+                guideNote = "Optional — skip it if you don't use daily time limits.",
                 optional = true,
-            )
-
-        OnboardingStep.DONE ->
+            ),
+        OnboardingStep.DONE to
             StepMeta(
                 icon = Icons.Default.Lock,
-                title = "You're all set!",
+                title = "You're all set",
                 description =
-                    "FocusGuard is ready. Head to Block to choose which apps to limit, " +
-                        "or check Settings to adjust daily time limits and set a PIN.",
-            )
-    }
+                    "Head to Block to choose what to limit, and set a PIN in Settings so " +
+                        "future-you can't undo it on a whim.",
+            ),
+    )
+
+private fun stepMeta(step: OnboardingStep): StepMeta = STEP_META.getValue(step)

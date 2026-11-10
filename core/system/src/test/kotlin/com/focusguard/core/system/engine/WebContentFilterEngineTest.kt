@@ -28,8 +28,14 @@ class WebContentFilterEngineTest {
     @Test
     fun `precise match returns null when subdomain blocking disabled and not exact`() {
         val strict = listOf(WebBlockRule(domain = "example.com", blockSubdomains = false, enabled = true))
-        val result = engine.detect("www.example.com", strict)
+        val result = engine.detect("m.example.com", strict)
         assertNull(result)
+    }
+
+    @Test
+    fun `www counts as the same site even when subdomain blocking is disabled`() {
+        val strict = listOf(WebBlockRule(domain = "example.com", blockSubdomains = false, enabled = true))
+        assertEquals(strict.single(), engine.detect("https://www.example.com/page", strict))
     }
 
     @Test
@@ -89,5 +95,29 @@ class WebContentFilterEngineTest {
     @Test
     fun `looksLikeUrl rejects text with no dot`() {
         assertFalse(WebContentFilterEngine.looksLikeUrl("localhost"))
+    }
+
+    @Test
+    fun `address bar text with a query, fragment or trailing words still yields the hostname`() {
+        val rule = listOf(WebBlockRule(domain = "example.com", blockSubdomains = false, enabled = true))
+        assertEquals(rule.single(), engine.detect("example.com?ref=1", rule))
+        assertEquals(rule.single(), engine.detect("example.com#top", rule))
+        assertEquals(rule.single(), engine.detect("example.com is loading", rule))
+    }
+
+    @Test
+    fun `looksLikeUrl rejects hosts that are too short, have empty labels or a non-letter TLD`() {
+        assertFalse(WebContentFilterEngine.looksLikeUrl("a.b"))
+        assertFalse(WebContentFilterEngine.looksLikeUrl("example..com"))
+        assertFalse(WebContentFilterEngine.looksLikeUrl(".example.com"))
+        assertFalse(WebContentFilterEngine.looksLikeUrl("example.c0m"))
+        assertFalse(WebContentFilterEngine.looksLikeUrl("example.c"))
+        assertFalse(WebContentFilterEngine.looksLikeUrl("example." + "x".repeat(25)))
+    }
+
+    @Test
+    fun `looksLikeUrl handles query strings and fragments after the host`() {
+        assertTrue(WebContentFilterEngine.looksLikeUrl("https://news.example.org?x=1"))
+        assertTrue(WebContentFilterEngine.looksLikeUrl("example.org#section"))
     }
 }

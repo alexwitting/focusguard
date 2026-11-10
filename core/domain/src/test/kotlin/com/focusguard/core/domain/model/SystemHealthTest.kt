@@ -6,23 +6,17 @@ import org.junit.jupiter.api.Test
 
 class SystemHealthTest {
     @Test
-    fun `isFullyOperational is true when both services are active`() {
-        val health = SystemHealth(accessibilityServiceActive = true, vpnServiceActive = true)
-
-        assertTrue(health.isFullyOperational)
+    fun `blocking is active when the accessibility service is running`() {
+        assertTrue(SystemHealth(accessibilityServiceActive = true, vpnServiceActive = true).isBlockingActive)
     }
 
     @Test
-    fun `isFullyOperational is false when the accessibility service is inactive`() {
-        val health = SystemHealth(accessibilityServiceActive = false, vpnServiceActive = true)
-
-        assertFalse(health.isFullyOperational)
+    fun `the optional VPN being off does not count as blocking being down`() {
+        assertTrue(SystemHealth(accessibilityServiceActive = true, vpnServiceActive = false).isBlockingActive)
     }
 
     @Test
-    fun `isFullyOperational is false when the vpn service is inactive`() {
-        val health = SystemHealth(accessibilityServiceActive = true, vpnServiceActive = false)
-
-        assertFalse(health.isFullyOperational)
+    fun `blocking is down when the accessibility service is off`() {
+        assertFalse(SystemHealth(accessibilityServiceActive = false, vpnServiceActive = true).isBlockingActive)
     }
 }

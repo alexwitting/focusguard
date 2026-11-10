@@ -12,7 +12,11 @@ import androidx.work.testing.TestListenableWorkerBuilder
 import com.focusguard.core.domain.model.AppBlockRule
 import com.focusguard.core.domain.model.BlockingStrategy
 import com.focusguard.core.system.engine.UsageSessionEngine
+import com.focusguard.core.system.receiver.AccessibilityWatchdog
+import com.focusguard.core.system.usage.UsageRecorder
 import com.focusguard.core.testing.FakeBlockRuleRepository
+import com.focusguard.core.testing.FakeClockProvider
+import com.focusguard.core.testing.FakeSettingsRepository
 import com.focusguard.core.testing.FakeUsageRepository
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.AfterEach
@@ -54,7 +58,16 @@ class UsagePollerWorkerTest {
                         appContext: Context,
                         workerClassName: String,
                         workerParameters: WorkerParameters,
-                    ): ListenableWorker = UsagePollerWorker(appContext, workerParameters, usageRepository, blockRuleRepository, usageSessionEngine)
+                    ): ListenableWorker =
+                        UsagePollerWorker(
+                            appContext,
+                            workerParameters,
+                            usageRepository,
+                            blockRuleRepository,
+                            usageSessionEngine,
+                            UsageRecorder(appContext, usageRepository, usageSessionEngine, FakeClockProvider()),
+                            AccessibilityWatchdog(appContext, FakeSettingsRepository()),
+                        )
                 },
             ).build()
 
@@ -204,6 +217,33 @@ class UsagePollerWorkerTest {
             assertEquals(2, usageRepository.recordedSessions.size)
             val distinctDates = usageRepository.recordedSessions.map { it.date }.distinct()
             assertEquals(2, distinctDates.size)
+        }
+
+    @Test
+    fun `doWork keeps counting an app that stays open across polls`() =
+        runTest {
+            val now = System.currentTimeMillis()
+            val prefs = context.getSharedPreferences("focusguard_usage_poller_state", Context.MODE_PRIVATE)
+            // Last poll ended 10 minutes ago with com.app still in the foreground, and nothing
+            // has happened since — the app is still open now.
+            prefs
+                .edit()
+                .putLong("last_processed_timestamp", now - 10 * 60_000)
+                .putStringSet("open_packages", setOf("com.app"))
+                .apply()
+
+            buildWorker().doWork()
+
+            val session = usageRepository.recordedSessions.single()
+            assertEquals("com.app", session.packageName)
+            val minutes =
+                session.sessions.sumOf {
+                    java.time.Duration
+                        .between(it.startTime, it.endTime)
+                        .toMinutes()
+                }
+            assertTrue(minutes in 9..10, "expected ~10 minutes, got $minutes")
+            assertEquals(setOf("com.app"), prefs.getStringSet("open_packages", emptySet()))
         }
 
     @Test

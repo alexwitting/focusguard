@@ -4,6 +4,7 @@ import com.focusguard.core.domain.model.PinVerificationToken
 import com.focusguard.core.domain.model.TimeWindow
 import com.focusguard.core.domain.repository.PinRepository
 import com.focusguard.core.domain.repository.SettingsRepository
+import com.focusguard.core.domain.time.TestClock
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -16,9 +17,10 @@ import org.junit.jupiter.api.Test
 import java.time.Instant
 
 class SetBedtimeUseCaseTest {
+    private val clock = TestClock()
     private val settingsRepository = mockk<SettingsRepository>()
     private val pinRepository = mockk<PinRepository>()
-    private val useCase = SetBedtimeUseCase(settingsRepository, pinRepository)
+    private val useCase = SetBedtimeUseCase(settingsRepository, pinRepository, clock)
 
     private val window = TimeWindow(startHour = 22, startMinute = 0, endHour = 6, endMinute = 0)
 

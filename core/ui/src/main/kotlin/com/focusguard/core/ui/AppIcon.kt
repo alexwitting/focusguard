@@ -5,7 +5,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -58,14 +57,14 @@ fun AppIconOrAvatar(
             painter = icon,
             contentDescription = null,
             contentScale = ContentScale.Crop,
-            modifier = modifier.size(size).clip(CircleShape),
+            modifier = modifier.size(size).clip(MaterialTheme.shapes.small),
         )
     } else {
         Box(
             modifier =
                 modifier
                     .size(size)
-                    .clip(CircleShape)
+                    .clip(MaterialTheme.shapes.small)
                     .background(MaterialTheme.colorScheme.primaryContainer),
             contentAlignment = Alignment.Center,
         ) {

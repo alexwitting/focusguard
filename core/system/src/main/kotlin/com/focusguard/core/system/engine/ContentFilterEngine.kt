@@ -98,11 +98,11 @@ class ContentFilterEngine
 
             fun domainsFor(filter: ContentFilter): List<String> =
                 when (filter) {
-                    ContentFilter.REELS ->
-                        listOf(
-                            "i.instagram.com",
-                            "scontent.cdninstagram.com",
-                        )
+                    // Nothing at the DNS layer: Reels share Instagram's API (i.instagram.com) and
+                    // media CDN (scontent*.cdninstagram.com) with the rest of the app, so blocking
+                    // those hosts took down feed, stories and DMs too. Reels are caught by the
+                    // accessibility service instead.
+                    ContentFilter.REELS -> emptyList()
                     ContentFilter.SHORTS ->
                         listOf(
                             "reel.youtube.com",

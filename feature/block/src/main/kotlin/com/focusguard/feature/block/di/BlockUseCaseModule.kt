@@ -3,6 +3,7 @@ package com.focusguard.feature.block.di
 import com.focusguard.core.domain.repository.BlockRuleRepository
 import com.focusguard.core.domain.repository.PinRepository
 import com.focusguard.core.domain.repository.WebBlockRuleRepository
+import com.focusguard.core.domain.time.ClockProvider
 import com.focusguard.core.domain.usecase.block.DeleteAppBlockRuleUseCase
 import com.focusguard.core.domain.usecase.block.DeleteWebBlockRuleUseCase
 import com.focusguard.core.domain.usecase.block.GetAllAppsWithRulesUseCase
@@ -32,29 +33,34 @@ object BlockUseCaseModule {
     fun provideUpsertAppBlockRule(
         blockRepo: BlockRuleRepository,
         pinRepo: PinRepository,
-    ): UpsertAppBlockRuleUseCase = UpsertAppBlockRuleUseCase(blockRepo, pinRepo)
+        clock: ClockProvider,
+    ): UpsertAppBlockRuleUseCase = UpsertAppBlockRuleUseCase(blockRepo, pinRepo, clock)
 
     @Provides
     fun provideDeleteAppBlockRule(
         blockRepo: BlockRuleRepository,
         pinRepo: PinRepository,
-    ): DeleteAppBlockRuleUseCase = DeleteAppBlockRuleUseCase(blockRepo, pinRepo)
+        clock: ClockProvider,
+    ): DeleteAppBlockRuleUseCase = DeleteAppBlockRuleUseCase(blockRepo, pinRepo, clock)
 
     @Provides
     fun provideUpsertWebBlockRule(
         webRepo: WebBlockRuleRepository,
         pinRepo: PinRepository,
-    ): UpsertWebBlockRuleUseCase = UpsertWebBlockRuleUseCase(webRepo, pinRepo)
+        clock: ClockProvider,
+    ): UpsertWebBlockRuleUseCase = UpsertWebBlockRuleUseCase(webRepo, pinRepo, clock)
 
     @Provides
     fun provideDeleteWebBlockRule(
         webRepo: WebBlockRuleRepository,
         pinRepo: PinRepository,
-    ): DeleteWebBlockRuleUseCase = DeleteWebBlockRuleUseCase(webRepo, pinRepo)
+        clock: ClockProvider,
+    ): DeleteWebBlockRuleUseCase = DeleteWebBlockRuleUseCase(webRepo, pinRepo, clock)
 
     @Provides
     fun provideSetContentFilter(
         webRepo: WebBlockRuleRepository,
         pinRepo: PinRepository,
-    ): SetContentFilterUseCase = SetContentFilterUseCase(webRepo, pinRepo)
+        clock: ClockProvider,
+    ): SetContentFilterUseCase = SetContentFilterUseCase(webRepo, pinRepo, clock)
 }

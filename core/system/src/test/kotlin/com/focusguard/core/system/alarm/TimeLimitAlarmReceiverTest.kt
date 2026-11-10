@@ -52,9 +52,21 @@ class TimeLimitAlarmReceiverTest {
     private fun intent(
         packageName: String? = null,
         label: String? = null,
+        reason: String? = null,
     ) = mockk<Intent> {
         every { getStringExtra(TimeLimitAlarmReceiver.EXTRA_BLOCKED_PACKAGE) } returns packageName
         every { getStringExtra(TimeLimitAlarmReceiver.EXTRA_BLOCKED_LABEL) } returns label
+        every { getStringExtra(TimeLimitAlarmReceiver.EXTRA_BLOCK_REASON) } returns reason
+    }
+
+    @Test
+    fun `passes the scheduled block reason through, such as bedtime starting`() {
+        val service = mockk<FocusGuardAccessibilityService>(relaxed = true)
+        setServiceInstance(service)
+
+        receiver.onReceive(context, intent(packageName = "com.app", label = "App", reason = BlockReason.BEDTIME.name))
+
+        verify(exactly = 1) { service.launchBlockedScreen("com.app", "App", BlockReason.BEDTIME) }
     }
 
     @Test
@@ -93,5 +105,15 @@ class TimeLimitAlarmReceiverTest {
         receiver.onReceive(context, intent(packageName = "com.app", label = null))
 
         verify(exactly = 1) { context.startActivity(any()) }
+    }
+
+    @Test
+    fun `an unknown reason falls back to the time-limit block`() {
+        val service = mockk<FocusGuardAccessibilityService>(relaxed = true)
+        setServiceInstance(service)
+
+        receiver.onReceive(context, intent(packageName = "com.app", label = "App", reason = "NOT_A_REASON"))
+
+        verify(exactly = 1) { service.launchBlockedScreen("com.app", "App", BlockReason.TIME_LIMIT_REACHED) }
     }
 }

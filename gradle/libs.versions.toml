@@ -42,6 +42,8 @@ turbine = "1.2.1"
 robolectric = "4.16.1"
 androidxTestCore = "1.7.0"
 robolectricJunit5 = "0.9.0"
+# README screenshots only (see app/src/test/.../ReadmeScreenshots.kt).
+roborazzi = "1.77.0"
 # androidx.test:runner/rules are released in lockstep with androidx.test:core (androidxTestCore).
 androidxTestRunner = "1.7.0"
 androidxTestRules = "1.7.0"
@@ -119,6 +121,8 @@ robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "
 androidx-test-core = { group = "androidx.test", name = "core", version.ref = "androidxTestCore" }
 androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "androidxTestRunner" }
 androidx-test-rules = { group = "androidx.test", name = "rules", version.ref = "androidxTestRules" }
+roborazzi = { group = "io.github.takahirom.roborazzi", name = "roborazzi", version.ref = "roborazzi" }
+roborazzi-compose = { group = "io.github.takahirom.roborazzi", name = "roborazzi-compose", version.ref = "roborazzi" }
 robolectric-junit5-extension = { group = "tech.apter.junit5.jupiter", name = "robolectric-extension", version.ref = "robolectricJunit5" }
 # Baseline Profiles
 androidx-profileinstaller = { group = "androidx.profileinstaller", name = "profileinstaller", version.ref = "profileinstaller" }

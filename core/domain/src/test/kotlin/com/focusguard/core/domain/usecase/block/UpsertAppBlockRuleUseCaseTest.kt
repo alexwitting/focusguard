@@ -5,6 +5,7 @@ import com.focusguard.core.domain.model.BlockingStrategy
 import com.focusguard.core.domain.model.PinVerificationToken
 import com.focusguard.core.domain.repository.BlockRuleRepository
 import com.focusguard.core.domain.repository.PinRepository
+import com.focusguard.core.domain.time.TestClock
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -17,9 +18,10 @@ import org.junit.jupiter.api.Test
 import java.time.Instant
 
 class UpsertAppBlockRuleUseCaseTest {
+    private val clock = TestClock()
     private val blockRuleRepository = mockk<BlockRuleRepository>()
     private val pinRepository = mockk<PinRepository>()
-    private val useCase = UpsertAppBlockRuleUseCase(blockRuleRepository, pinRepository)
+    private val useCase = UpsertAppBlockRuleUseCase(blockRuleRepository, pinRepository, clock)
 
     private val rule = AppBlockRule(packageName = "com.app", label = "App", strategy = BlockingStrategy.AlwaysBlock)
 

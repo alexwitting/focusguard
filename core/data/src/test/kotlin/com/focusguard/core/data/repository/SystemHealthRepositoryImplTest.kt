@@ -115,7 +115,7 @@ class SystemHealthRepositoryImplTest {
 
             assertTrue(health.accessibilityServiceActive)
             assertTrue(health.vpnServiceActive)
-            assertTrue(health.isFullyOperational)
+            assertTrue(health.isBlockingActive)
         }
 
     @Test

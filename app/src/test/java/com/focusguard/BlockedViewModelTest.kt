@@ -64,6 +64,27 @@ class BlockedViewModelTest {
         }
 
     @Test
+    fun `initialize records a block only once, even when the screen recomposes or rotates`() =
+        runTest {
+            val viewModel = createViewModel()
+
+            repeat(3) { viewModel.initialize("com.app", BlockReason.ALWAYS_BLOCKED) }
+
+            assertEquals(1, usageRepository.getBlockedAttempts(LocalDate.now()).first())
+        }
+
+    @Test
+    fun `a new block for a different app is recorded separately`() =
+        runTest {
+            val viewModel = createViewModel()
+
+            viewModel.initialize("com.app", BlockReason.ALWAYS_BLOCKED)
+            viewModel.initialize("com.other", BlockReason.ALWAYS_BLOCKED)
+
+            assertEquals(2, usageRepository.getBlockedAttempts(LocalDate.now()).first())
+        }
+
+    @Test
     fun `extension is offered when time limit reached and grace period enabled and not yet taken`() =
         runTest {
             settingsRepository.setGracePeriodEnabled(true)

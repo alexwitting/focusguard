@@ -7,9 +7,12 @@ import java.time.Instant
 
 class PinVerificationTokenTest {
     @Test
-    fun `token is valid when issued now`() {
-        val token = PinVerificationToken(issuedAt = Instant.now())
-        assertTrue(token.isValid)
+    fun `token is valid until five minutes after it was issued, and not after`() {
+        val issued = Instant.parse("2026-01-01T12:00:00Z")
+        val token = PinVerificationToken(issuedAt = issued)
+        assertTrue(token.isValidAt(issued))
+        assertTrue(token.isValidAt(issued.plusSeconds(299)))
+        assertFalse(token.isValidAt(issued.plusSeconds(300)))
     }
 
     @Test
@@ -20,7 +23,7 @@ class PinVerificationTokenTest {
                 issuedAt = pastInstant,
                 expiresAt = pastInstant.plusSeconds(1),
             )
-        assertFalse(token.isValid)
+        assertFalse(token.isValidAt(Instant.now()))
     }
 
     @Test

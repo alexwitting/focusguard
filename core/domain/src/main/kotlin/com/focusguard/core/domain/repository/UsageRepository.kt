@@ -20,4 +20,7 @@ interface UsageRepository {
     suspend fun recordBlockedAttempt(packageName: String)
 
     suspend fun recordUsageSession(record: AppUsageRecord)
+
+    /** Deletes usage sessions, blocked attempts and extension records dated before [date]. */
+    suspend fun pruneBefore(date: LocalDate)
 }

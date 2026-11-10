@@ -9,6 +9,7 @@ import android.content.pm.ResolveInfo
 import android.content.pm.ServiceInfo
 import android.view.accessibility.AccessibilityManager
 import androidx.core.app.NotificationCompat
+import com.focusguard.core.testing.FakeSettingsRepository
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkConstructor
@@ -16,6 +17,7 @@ import io.mockk.mockkStatic
 import io.mockk.unmockkConstructor
 import io.mockk.unmockkStatic
 import io.mockk.verify
+import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -26,11 +28,12 @@ import org.junit.jupiter.api.Test
  * received [Intent] and the one `postAlert` builds internally must be mocked, never constructed
  * for real.
  */
-class WatchdogReceiverTest {
+class AccessibilityWatchdogTest {
     private val context = mockk<Context>()
     private val accessibilityManager = mockk<AccessibilityManager>()
     private val notificationManager = mockk<NotificationManager>()
-    private val receiver = WatchdogReceiver()
+    private val settingsRepository = FakeSettingsRepository()
+    private val watchdog = AccessibilityWatchdog(context, settingsRepository)
 
     private companion object {
         const val PACKAGE_NAME = "com.focusguard"
@@ -80,39 +83,40 @@ class WatchdogReceiverTest {
         }
 
     @Test
-    fun `ignores intents that are not ACTION_SCREEN_ON`() {
-        val intent = mockk<Intent> { every { action } returns Intent.ACTION_SCREEN_OFF }
+    fun `does nothing before onboarding is complete`() =
+        runTest {
+            watchdog.check()
 
-        receiver.onReceive(context, intent)
-
-        verify(exactly = 0) { context.getSystemService(any<String>()) }
-    }
-
-    @Test
-    fun `cancels the alert notification when the accessibility service is enabled`() {
-        val intent = mockk<Intent> { every { action } returns Intent.ACTION_SCREEN_ON }
-        every { accessibilityManager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK) } returns
-            listOf(enabledAccessibilityService())
-        every { notificationManager.cancel(NOTIFICATION_ID) } returns Unit
-
-        receiver.onReceive(context, intent)
-
-        verify(exactly = 1) { notificationManager.cancel(NOTIFICATION_ID) }
-        verify(exactly = 0) { notificationManager.notify(any(), any()) }
-    }
+            verify(exactly = 0) { context.getSystemService(any<String>()) }
+        }
 
     @Test
-    fun `posts an alert notification when the accessibility service is disabled`() {
-        val intent = mockk<Intent> { every { action } returns Intent.ACTION_SCREEN_ON }
-        every { accessibilityManager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK) } returns
-            emptyList()
-        every { notificationManager.createNotificationChannel(any()) } returns Unit
-        every { notificationManager.notify(NOTIFICATION_ID, any()) } returns Unit
+    fun `cancels the alert notification when the accessibility service is enabled`() =
+        runTest {
+            settingsRepository.setOnboardingComplete()
+            every { accessibilityManager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK) } returns
+                listOf(enabledAccessibilityService())
+            every { notificationManager.cancel(NOTIFICATION_ID) } returns Unit
 
-        receiver.onReceive(context, intent)
+            watchdog.check()
 
-        verify(exactly = 1) { notificationManager.createNotificationChannel(any()) }
-        verify(exactly = 1) { notificationManager.notify(NOTIFICATION_ID, any()) }
-        verify(exactly = 0) { notificationManager.cancel(any<Int>()) }
-    }
+            verify(exactly = 1) { notificationManager.cancel(NOTIFICATION_ID) }
+            verify(exactly = 0) { notificationManager.notify(any(), any()) }
+        }
+
+    @Test
+    fun `posts an alert notification when the accessibility service is disabled`() =
+        runTest {
+            settingsRepository.setOnboardingComplete()
+            every { accessibilityManager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK) } returns
+                emptyList()
+            every { notificationManager.createNotificationChannel(any()) } returns Unit
+            every { notificationManager.notify(NOTIFICATION_ID, any()) } returns Unit
+
+            watchdog.check()
+
+            verify(exactly = 1) { notificationManager.createNotificationChannel(any()) }
+            verify(exactly = 1) { notificationManager.notify(NOTIFICATION_ID, any()) }
+            verify(exactly = 0) { notificationManager.cancel(any<Int>()) }
+        }
 }

@@ -2,6 +2,7 @@ package com.focusguard.core.data.repository
 
 import android.content.SharedPreferences
 import android.util.Base64
+import com.focusguard.core.domain.model.PinLockout
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkStatic
@@ -11,6 +12,7 @@ import io.mockk.verify
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -120,5 +122,80 @@ class PinRepositoryImplTest {
             val repository = PinRepositoryImpl(prefs)
 
             assertTrue(repository.isPinEnabled().first())
+        }
+
+    @Test
+    fun `new PINs are stored as a slow PBKDF2 hash, never the raw PIN`() =
+        runTest {
+            PinRepositoryImpl(prefs).setPin("123456")
+
+            val hash = stored.getValue("pin_hash")
+            assertTrue(hash.startsWith("pbkdf2:120000:"), hash)
+            assertFalse(hash.contains("123456"))
+        }
+
+    @Test
+    fun `a legacy SHA-256 hash still verifies and is upgraded to PBKDF2 on the next correct entry`() =
+        runTest {
+            val salt = ByteArray(16) { it.toByte() }
+            val legacy =
+                java.util.Base64.getEncoder().encodeToString(
+                    java.security.MessageDigest
+                        .getInstance("SHA-256")
+                        .apply { update(salt) }
+                        .digest("123456".toByteArray()),
+                )
+            stored["pin_hash"] = legacy
+            stored["pin_salt"] =
+                java.util.Base64
+                    .getEncoder()
+                    .encodeToString(salt)
+            val repository = PinRepositoryImpl(prefs)
+
+            assertFalse(repository.verifyPin("000000"))
+            assertEquals(legacy, stored["pin_hash"], "a wrong PIN must not touch the stored hash")
+
+            assertTrue(repository.verifyPin("123456"))
+            assertTrue(stored.getValue("pin_hash").startsWith("pbkdf2:"))
+            assertTrue(repository.verifyPin("123456"))
+        }
+
+    @Test
+    fun `lockout state round-trips and is cleared by a new PIN`() =
+        runTest {
+            val repository = PinRepositoryImpl(prefs)
+            repository.setLockout(PinLockout(failedAttempts = 6, lockedUntilEpochMillis = 123_456))
+
+            assertEquals(PinLockout(6, 123_456), PinRepositoryImpl(prefs).getLockout())
+
+            repository.setPin("654321")
+            assertEquals(PinLockout(), repository.getLockout())
+        }
+
+    @Test
+    fun `corrupt or partial stored values never verify`() =
+        runTest {
+            val repository = PinRepositoryImpl(prefs)
+            stored["pin_hash"] = "pbkdf2:120000:abc"
+            assertFalse(repository.verifyPin("123456"), "salt missing")
+
+            stored["pin_salt"] =
+                java.util.Base64
+                    .getEncoder()
+                    .encodeToString(ByteArray(16))
+            stored["pin_hash"] = "pbkdf2:notanumber:abc"
+            assertFalse(repository.verifyPin("123456"), "bad iteration count")
+            stored["pin_hash"] = "pbkdf2:1000"
+            assertFalse(repository.verifyPin("123456"), "hash part missing")
+        }
+
+    @Test
+    fun `a corrupt lockout value reads as no lockout rather than crashing`() =
+        runTest {
+            val repository = PinRepositoryImpl(prefs)
+            stored["pin_lockout"] = "x:y"
+            assertEquals(PinLockout(), repository.getLockout())
+            stored["pin_lockout"] = "3"
+            assertEquals(PinLockout(failedAttempts = 3), repository.getLockout())
         }
 }

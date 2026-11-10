@@ -1,12 +1,16 @@
 package com.focusguard.core.system.worker
 
 import android.content.Context
+import android.util.Log
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.focusguard.core.domain.model.UsageRetention
+import com.focusguard.core.domain.repository.UsageRepository
+import com.focusguard.core.domain.time.ClockProvider
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import java.time.LocalDateTime
@@ -18,15 +22,21 @@ class MidnightResetWorker
     constructor(
         @Assisted context: Context,
         @Assisted params: WorkerParameters,
+        private val usageRepository: UsageRepository,
+        private val clockProvider: ClockProvider,
     ) : CoroutineWorker(context, params) {
         override suspend fun doWork(): Result {
-            // UsageStatsManager resets automatically at midnight — nothing to clear.
             UsagePollerWorker.notified80Packages.clear()
+            // Keep the database from growing forever. A failure here mustn't stop the nightly
+            // chain from rescheduling itself, so it's logged and retried tomorrow.
+            runCatching { usageRepository.pruneBefore(clockProvider.today().minusDays(UsageRetention.DAYS)) }
+                .onFailure { Log.e(TAG, "Pruning old usage history failed", it) }
             scheduleNext(applicationContext)
             return Result.success()
         }
 
         companion object {
+            private const val TAG = "MidnightResetWorker"
             private const val WORK_NAME = "focusguard_midnight_reset"
 
             fun scheduleIfNeeded(context: Context) {

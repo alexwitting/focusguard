@@ -1,7 +1,9 @@
 package com.focusguard.core.domain.repository
 
 import com.focusguard.core.domain.model.PinVerificationToken
+import com.focusguard.core.domain.time.ClockProvider
 import kotlinx.coroutines.flow.first
+import java.time.Instant
 
 /**
  * The PIN Gate Pattern: UseCases that mutate rules/settings call this before applying the
@@ -12,9 +14,11 @@ import kotlinx.coroutines.flow.first
 suspend fun PinRepository.requireValidTokenIfEnabled(
     token: PinVerificationToken?,
     action: String,
+    clock: ClockProvider,
 ) {
     val pinEnabled = isPinEnabled().first()
     if (pinEnabled) {
-        require(token != null && token.isValid) { "A valid PIN token is required to $action" }
+        val now = Instant.ofEpochMilli(clock.epochMillis())
+        require(token != null && token.isValidAt(now)) { "A valid PIN token is required to $action" }
     }
 }

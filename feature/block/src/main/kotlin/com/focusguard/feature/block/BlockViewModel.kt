@@ -6,8 +6,10 @@ import androidx.lifecycle.viewModelScope
 import com.focusguard.core.domain.model.AppBlockRule
 import com.focusguard.core.domain.model.AppWithRule
 import com.focusguard.core.domain.model.ContentFilter
+import com.focusguard.core.domain.model.PinAttemptResult
 import com.focusguard.core.domain.model.PinVerificationToken
 import com.focusguard.core.domain.model.WebBlockRule
+import com.focusguard.core.domain.model.WebDomain
 import com.focusguard.core.domain.time.ClockProvider
 import com.focusguard.core.domain.usecase.block.DeleteAppBlockRuleUseCase
 import com.focusguard.core.domain.usecase.block.DeleteWebBlockRuleUseCase
@@ -19,7 +21,11 @@ import com.focusguard.core.domain.usecase.block.UpsertAppBlockRuleUseCase
 import com.focusguard.core.domain.usecase.block.UpsertWebBlockRuleUseCase
 import com.focusguard.core.domain.usecase.pin.GetPinEnabledUseCase
 import com.focusguard.core.domain.usecase.pin.VerifyPinUseCase
+import com.focusguard.core.domain.usecase.settings.EnableWebContentBlockingUseCase
+import com.focusguard.core.domain.usecase.settings.GetSystemHealthUseCase
+import com.focusguard.core.domain.usecase.settings.GetWebContentBlockingEnabledUseCase
 import com.focusguard.core.domain.usecase.usage.GetDailyUsageUseCase
+import com.focusguard.core.ui.errorMessage
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -31,6 +37,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
@@ -58,6 +65,9 @@ class BlockViewModel
         private val getPinEnabled: GetPinEnabledUseCase,
         private val getDailyUsage: GetDailyUsageUseCase,
         private val clockProvider: ClockProvider,
+        private val getWebContentBlockingEnabled: GetWebContentBlockingEnabledUseCase,
+        private val enableWebContentBlocking: EnableWebContentBlockingUseCase,
+        private val getSystemHealth: GetSystemHealthUseCase,
     ) : ViewModel() {
         private val _state = MutableStateFlow(BlockState())
         val state: StateFlow<BlockState> = _state.asStateFlow()
@@ -72,6 +82,7 @@ class BlockViewModel
             viewModelScope.launch {
                 dateTicker()
                     .flatMapLatest { date -> getDailyUsage(date) }
+                    .catch { e -> Log.e(TAG, "Failed to load today's usage", e) }
                     .collect { usage ->
                         _state.update {
                             it.copy(usageByPackage = usage.associate { s -> s.packageName to s.totalMinutes })
@@ -84,18 +95,35 @@ class BlockViewModel
                     getWebBlockRules(),
                     getContentFilters(),
                     getPinEnabled(),
+                    getWebContentBlockingEnabled(),
                     ::BlockScreenData,
-                ).collect { data ->
+                ).catch { e ->
+                    // Without this an upstream failure would end the flow for good and leave the
+                    // screen stuck on its spinner (see CLAUDE.md, Error handling).
+                    Log.e(TAG, "Failed to load block list", e)
+                    _state.update { it.copy(isLoading = false) }
+                    _effects.emit(BlockEffect.ShowSnackbar("Couldn't load your block list"))
+                }.collect { data ->
                     _state.update {
                         it.copy(
                             apps = data.apps,
                             webRules = data.webRules,
                             activeFilters = data.filters,
                             isPinEnabled = data.pinEnabled,
+                            browserScanEnabled = data.browserScanEnabled,
                             isLoading = false,
                         )
                     }
                 }
+            }
+        }
+
+        init {
+            viewModelScope.launch {
+                getSystemHealth
+                    .observeSystemHealth()
+                    .catch { e -> Log.e(TAG, "observeSystemHealth failed", e) }
+                    .collect { health -> _state.update { it.copy(vpnActive = health.vpnServiceActive) } }
             }
         }
 
@@ -104,6 +132,7 @@ class BlockViewModel
             val webRules: List<WebBlockRule>,
             val filters: Set<ContentFilter>,
             val pinEnabled: Boolean,
+            val browserScanEnabled: Boolean,
         )
 
         // getDailyUsage(LocalDate.now()) captured once at construction would pin usage stats to
@@ -155,6 +184,13 @@ class BlockViewModel
                 is BlockIntent.PinInputChanged ->
                     _state.update { it.copy(pinInput = intent.value.take(6), pinError = null) }
                 is BlockIntent.SubmitPin -> handleSubmitPin()
+                BlockIntent.EnableBrowserScan ->
+                    viewModelScope.launch {
+                        runCatching { enableWebContentBlocking() }.onFailure { e ->
+                            Log.e(TAG, "Failed to enable browser scan", e)
+                            _effects.emit(BlockEffect.ShowSnackbar("Couldn't turn on the browser scan"))
+                        }
+                    }
                 is BlockIntent.DismissPinDialog -> {
                     pendingOp = null
                     _state.update { it.copy(pinRequired = false, pinInput = "", pinError = null) }
@@ -166,15 +202,8 @@ class BlockViewModel
             domain: String,
             blockSubdomains: Boolean,
         ) {
-            val cleaned =
-                domain
-                    .trim()
-                    .lowercase()
-                    .removePrefix("https://")
-                    .removePrefix("http://")
-                    .removePrefix("www.")
-                    .trimEnd('/')
-            if (cleaned.isEmpty() || !cleaned.contains('.')) {
+            val cleaned = WebDomain.normalize(domain)
+            if (cleaned == null) {
                 viewModelScope.launch {
                     _effects.emit(BlockEffect.ShowSnackbar("Enter a valid domain (e.g. instagram.com)"))
                 }
@@ -192,7 +221,7 @@ class BlockViewModel
             if (!_state.value.isPinEnabled) {
                 viewModelScope.launch {
                     runCatching { op(null) }.onFailure { e ->
-                        Log.e("BlockViewModel", "Operation failed", e)
+                        Log.e(TAG, "Operation failed", e)
                         _effects.emit(BlockEffect.ShowSnackbar("Failed: ${e.message}"))
                     }
                 }
@@ -209,16 +238,17 @@ class BlockViewModel
                 return
             }
             viewModelScope.launch {
-                val token = verifyPin(pin)
+                val result = verifyPin(pin)
+                val token = (result as? PinAttemptResult.Success)?.token
                 if (token == null) {
-                    _state.update { it.copy(pinError = "Incorrect PIN", pinInput = "") }
+                    _state.update { it.copy(pinError = result.errorMessage(), pinInput = "") }
                 } else {
                     val op = pendingOp
                     pendingOp = null
                     _state.update { it.copy(pinRequired = false, pinInput = "", pinError = null) }
                     if (op != null) {
                         runCatching { op(token) }.onFailure { e ->
-                            Log.e("BlockViewModel", "Operation failed after PIN", e)
+                            Log.e(TAG, "Operation failed after PIN", e)
                             _effects.emit(BlockEffect.ShowSnackbar("Failed: ${e.message}"))
                         }
                     }
@@ -227,6 +257,7 @@ class BlockViewModel
         }
 
         private companion object {
+            const val TAG = "BlockViewModel"
             const val DATE_CHECK_INTERVAL_MS = 60_000L
         }
     }

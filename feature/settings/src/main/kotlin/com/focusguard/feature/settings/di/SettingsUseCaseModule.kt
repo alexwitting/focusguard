@@ -2,14 +2,15 @@ package com.focusguard.feature.settings.di
 
 import com.focusguard.core.domain.repository.PinRepository
 import com.focusguard.core.domain.repository.SettingsRepository
+import com.focusguard.core.domain.time.ClockProvider
 import com.focusguard.core.domain.usecase.pin.DisablePinUseCase
 import com.focusguard.core.domain.usecase.pin.GetPinEnabledUseCase
 import com.focusguard.core.domain.usecase.pin.SetPinUseCase
 import com.focusguard.core.domain.usecase.pin.VerifyPinUseCase
-import com.focusguard.core.domain.usecase.settings.EnableWebContentBlockingUseCase
 import com.focusguard.core.domain.usecase.settings.GetBedtimeUseCase
-import com.focusguard.core.domain.usecase.settings.GetWebContentBlockingEnabledUseCase
+import com.focusguard.core.domain.usecase.settings.GetGracePeriodEnabledUseCase
 import com.focusguard.core.domain.usecase.settings.SetBedtimeUseCase
+import com.focusguard.core.domain.usecase.settings.SetGracePeriodEnabledUseCase
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -25,10 +26,14 @@ object SettingsUseCaseModule {
     fun provideSetBedtime(
         settings: SettingsRepository,
         pin: PinRepository,
-    ): SetBedtimeUseCase = SetBedtimeUseCase(settings, pin)
+        clock: ClockProvider,
+    ): SetBedtimeUseCase = SetBedtimeUseCase(settings, pin, clock)
 
     @Provides
-    fun provideVerifyPin(repo: PinRepository): VerifyPinUseCase = VerifyPinUseCase(repo)
+    fun provideVerifyPin(
+        repo: PinRepository,
+        clock: ClockProvider,
+    ): VerifyPinUseCase = VerifyPinUseCase(repo, clock)
 
     @Provides
     fun provideGetPinEnabled(repo: PinRepository): GetPinEnabledUseCase = GetPinEnabledUseCase(repo)
@@ -37,11 +42,18 @@ object SettingsUseCaseModule {
     fun provideSetPin(repo: PinRepository): SetPinUseCase = SetPinUseCase(repo)
 
     @Provides
-    fun provideDisablePin(repo: PinRepository): DisablePinUseCase = DisablePinUseCase(repo)
+    fun provideDisablePin(
+        repo: PinRepository,
+        clock: ClockProvider,
+    ): DisablePinUseCase = DisablePinUseCase(repo, clock)
 
     @Provides
-    fun provideGetWebContentBlockingEnabled(repo: SettingsRepository): GetWebContentBlockingEnabledUseCase = GetWebContentBlockingEnabledUseCase(repo)
+    fun provideGetGracePeriodEnabled(repo: SettingsRepository): GetGracePeriodEnabledUseCase = GetGracePeriodEnabledUseCase(repo)
 
     @Provides
-    fun provideEnableWebContentBlocking(repo: SettingsRepository): EnableWebContentBlockingUseCase = EnableWebContentBlockingUseCase(repo)
+    fun provideSetGracePeriodEnabled(
+        settings: SettingsRepository,
+        pin: PinRepository,
+        clock: ClockProvider,
+    ): SetGracePeriodEnabledUseCase = SetGracePeriodEnabledUseCase(settings, pin, clock)
 }

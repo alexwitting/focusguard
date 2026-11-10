@@ -1,7 +1,10 @@
 package com.focusguard.core.data.di
 
+import com.focusguard.core.domain.repository.SettingsRepository
 import com.focusguard.core.domain.repository.SystemHealthRepository
+import com.focusguard.core.domain.usecase.settings.EnableWebContentBlockingUseCase
 import com.focusguard.core.domain.usecase.settings.GetSystemHealthUseCase
+import com.focusguard.core.domain.usecase.settings.GetWebContentBlockingEnabledUseCase
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -16,4 +19,11 @@ import dagger.hilt.components.SingletonComponent
 object UseCaseModule {
     @Provides
     fun provideGetSystemHealth(repo: SystemHealthRepository): GetSystemHealthUseCase = GetSystemHealthUseCase(repo)
+
+    // Shared by Settings (the browser-scan row) and Block (the "sites aren't blocked" prompt).
+    @Provides
+    fun provideGetWebContentBlockingEnabled(repo: SettingsRepository): GetWebContentBlockingEnabledUseCase = GetWebContentBlockingEnabledUseCase(repo)
+
+    @Provides
+    fun provideEnableWebContentBlocking(repo: SettingsRepository): EnableWebContentBlockingUseCase = EnableWebContentBlockingUseCase(repo)
 }

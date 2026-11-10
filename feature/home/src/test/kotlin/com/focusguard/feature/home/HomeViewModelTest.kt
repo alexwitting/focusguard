@@ -81,20 +81,21 @@ class HomeViewModelTest {
         }
 
     @Test
-    fun `significantDailyUsage filters out apps used a minute or less`() =
+    fun `significantDailyUsage keeps a minute of use but drops zero-minute apps`() =
         runTest {
             val today = LocalDate.of(2026, 1, 15)
             clockProvider.setNow(today.atStartOfDay())
             usageRepository.setDailyUsage(
                 today,
-                AppUsageSummary(packageName = "com.tiny", label = "Tiny", totalMinutes = 1, limitMinutes = null),
+                AppUsageSummary(packageName = "com.zero", label = "Zero", totalMinutes = 0, limitMinutes = null),
+                AppUsageSummary(packageName = "com.one", label = "One", totalMinutes = 1, limitMinutes = null),
                 AppUsageSummary(packageName = "com.real", label = "Real", totalMinutes = 15, limitMinutes = null),
             )
 
             val viewModel = createViewModel()
 
             assertEquals(
-                listOf("com.real"),
+                listOf("com.one", "com.real"),
                 viewModel.state.value.significantDailyUsage
                     .map { it.packageName },
             )
@@ -119,6 +120,44 @@ class HomeViewModelTest {
         }
 
     @Test
+    fun `significantWeeklyUsage drops zero-minute apps this week`() =
+        runTest {
+            val today = LocalDate.of(2026, 1, 15)
+            clockProvider.setNow(today.atStartOfDay())
+            usageRepository.setWeeklyAppBreakdown(
+                AppUsageSummary(packageName = "com.real", label = "Real", totalMinutes = 300, limitMinutes = null),
+                AppUsageSummary(packageName = "com.one", label = "One", totalMinutes = 1, limitMinutes = null),
+                AppUsageSummary(packageName = "com.zero", label = "Zero", totalMinutes = 0, limitMinutes = null),
+            )
+
+            val viewModel = createViewModel()
+
+            assertEquals(
+                listOf("com.real", "com.one"),
+                viewModel.state.value.significantWeeklyUsage
+                    .map { it.packageName },
+            )
+        }
+
+    @Test
+    fun `screen time uses the day's full total, not just the listed apps`() =
+        runTest {
+            val today = LocalDate.of(2026, 1, 15)
+            clockProvider.setNow(today.atStartOfDay())
+            // 40 minutes across listed apps, plus sub-minute opens the per-app list leaves out.
+            usageRepository.setDailyUsage(
+                today,
+                AppUsageSummary(packageName = "com.app", label = "App", totalMinutes = 40, limitMinutes = null),
+            )
+            usageRepository.setWeeklyTotals(DailyTotal(today, 41))
+
+            val viewModel = createViewModel()
+
+            assertEquals(today, viewModel.state.value.today)
+            assertEquals(41, viewModel.state.value.totalMinutesToday)
+        }
+
+    @Test
     fun `systemHealth reflects the repository's current reading`() =
         runTest {
             val today = LocalDate.of(2026, 1, 15)
@@ -129,7 +168,9 @@ class HomeViewModelTest {
 
             val viewModel = createViewModel()
 
-            assertFalse(viewModel.state.value.systemHealth.isFullyOperational)
+            assertFalse(viewModel.state.value.systemHealth.vpnServiceActive)
+            // The VPN is optional — it being off doesn't mean blocking is down.
+            assertTrue(viewModel.state.value.systemHealth.isBlockingActive)
             assertTrue(viewModel.state.value.systemHealth.accessibilityServiceActive)
         }
 
@@ -156,4 +197,17 @@ class HomeViewModelTest {
             assertFalse(viewModel.state.value.isLoading)
             assertTrue(viewModel.state.value.loadError)
         }
+
+    @Test
+    fun `screen time falls back to the per-app sum when there's no daily total for today`() {
+        val today = LocalDate.of(2026, 1, 15)
+        val state =
+            HomeState(
+                today = today,
+                dailyUsage = listOf(AppUsageSummary("com.a", "A", totalMinutes = 20, limitMinutes = null)),
+                weeklyTotals = listOf(DailyTotal(today.minusDays(1), 99)),
+            )
+        assertEquals(20, state.totalMinutesToday)
+        assertEquals(20, state.copy(today = null).totalMinutesToday)
+    }
 }

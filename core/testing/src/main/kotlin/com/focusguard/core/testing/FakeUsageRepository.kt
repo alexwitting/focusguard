@@ -67,4 +67,12 @@ class FakeUsageRepository : UsageRepository {
     override suspend fun recordUsageSession(record: AppUsageRecord) {
         _recordedSessions.add(record)
     }
+
+    /** The most recent [pruneBefore] cutoff, for tests. */
+    var prunedBefore: LocalDate? = null
+        private set
+
+    override suspend fun pruneBefore(date: LocalDate) {
+        prunedBefore = date
+    }
 }

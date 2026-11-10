@@ -37,7 +37,12 @@ jobs:
       - name: Unit tests + coverage
         run: ./gradlew test koverXmlReport koverHtmlReport
 
+      # Fails the build if any module drops below its coverage gate (see build.gradle.kts files).
+      - name: Coverage gates
+        run: ./gradlew koverVerify
+
       - uses: actions/upload-artifact@v4
+        if: always()   # keep the report when a gate fails, so you can see why
         with:
           name: coverage-report
           path: build/reports/kover/

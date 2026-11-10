@@ -102,16 +102,11 @@ class OnboardingViewModel
                 OnboardingStep.DONE -> OnboardingStep.DONE
             }
 
-        fun isCurrentStepGranted(): Boolean {
-            val health = _state.value.health
-            return when (_state.value.step) {
-                OnboardingStep.ACCESSIBILITY -> health.accessibilityEnabled
-                OnboardingStep.USAGE_ACCESS -> health.usageStatsGranted
-                OnboardingStep.BATTERY -> health.batteryOptimizationIgnored
-                OnboardingStep.VPN -> health.vpnPrepared
-                OnboardingStep.EXACT_ALARM -> health.exactAlarmAllowed
-                OnboardingStep.WELCOME, OnboardingStep.DONE -> true
-            }
+        fun isCurrentStepGranted(): Boolean = _state.value.let { it.isGranted(it.step) }
+
+        /** Opens App info so the user can lift Android's restricted-settings block. */
+        fun onOpenAppInfo() {
+            viewModelScope.launch { _effects.emit(OnboardingEffect.OpenAppDetailsSettings) }
         }
 
         private companion object {

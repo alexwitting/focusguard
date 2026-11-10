@@ -47,6 +47,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ./gradlew clean
 ```
 
+Debug builds are signed with the shared, non-secret `config/signing/debug.keystore` (wired in `AndroidApplicationConventionPlugin`), so CI-built and locally built debug APKs install over each other.
+
 ## Module Structure
 
 ```
@@ -142,7 +144,7 @@ Versions live in `gradle/libs.versions.toml`. Always add deps there, not inline.
 
 ## Current State
 
-All layers are implemented and wired end to end: `:core:domain` UseCases/models, `:core:data` Room+DataStore repositories, `:core:system` (`FocusGuardAccessibilityService`, `DnsVpnService`, WorkManager pollers, `TimeLimitScheduler`), and all four feature screens (Home, Block, Settings, Onboarding) plus `BlockedActivity`. CI (`.github/workflows/focusguard.yml`) runs `ktlintCheck detekt` + `test` + coverage on every push/PR to `master`; a manual `workflow_dispatch` toggle can additionally build and upload the debug APK. Instrumented tests are not yet wired into CI — run them locally via `connectedAndroidTest`.
+All layers are implemented and wired end to end: `:core:domain` UseCases/models, `:core:data` Room+DataStore repositories, `:core:system` (`FocusGuardAccessibilityService`, `DnsVpnService`, WorkManager pollers, `TimeLimitScheduler`), and all four feature screens (Home, Block, Settings, Onboarding) plus `BlockedActivity`. CI (`.github/workflows/focusguard.yml`) runs `ktlintCheck detekt` + `test` + coverage reports + `koverVerify` (the coverage gates fail the build) on every push/PR to `master`; a manual `workflow_dispatch` toggle can additionally build and upload the debug APK. Instrumented tests are not yet wired into CI — run them locally via `connectedAndroidTest`.
 
 Work generally proceeds bug/feature-at-a-time now rather than in the original phase order — when picking up new work, `git log` and the module structure above are the source of truth, not a phase number.
 
@@ -155,4 +157,5 @@ Work generally proceeds bug/feature-at-a-time now rather than in the original ph
 - `runTest` from `kotlinx.coroutines.test` for suspend functions
 - A ViewModel method that launches on `Dispatchers.IO` explicitly (e.g. `forceRefresh()`) isn't touched by `MainDispatcherExtension` (which only swaps `Dispatchers.Main`) — poll with a bounded real-time `awaitCondition { ... }` helper instead of asserting immediately; see `SettingsViewModelTest`/`OnboardingViewModelTest` for the pattern.
 - Engine classes (`AppBlockingEngine`, `DnsFilterEngine`) target 100% branch coverage.
+- Kover class exclusions (`build-logic/.../KoverConventionPlugin.kt`) match fully-qualified names — use `*.ClassName`, never a bare name. Compose UI files (`*ScreenKt*`, `*DialogKt`, `*SheetKt`) are excluded, so keep testable helpers they need in a separate file.
 - Kover per-module `minBound` gates are a **regression floor, not a target** — set just below currently-measured coverage so an accidental drop fails CI without forcing coverage-chasing busywork. Don't ratchet a gate above 85%; the aggregate root `build.gradle.kts` also gates merged branch coverage at 85%. If a change legitimately raises a module's coverage, it's fine to leave the old (lower) gate in place rather than bumping it every time.
