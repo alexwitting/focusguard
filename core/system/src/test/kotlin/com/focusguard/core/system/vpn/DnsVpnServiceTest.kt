@@ -12,8 +12,8 @@ import io.mockk.mockk
 import io.mockk.verify
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -24,25 +24,22 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.xbill.DNS.DClass
+import org.xbill.DNS.Flags
 import org.xbill.DNS.Message
 import org.xbill.DNS.Name
 import org.xbill.DNS.Rcode
 import org.xbill.DNS.Record
 import org.xbill.DNS.Type
+import java.io.File
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.reflect.full.callSuspend
 import kotlin.reflect.full.declaredFunctions
 import kotlin.reflect.jvm.isAccessible
 
 /**
- * DnsVpnService's only meaningfully unit-testable surface is packet parsing/decision logic
- * (handlePacket, ipChecksum, wrapInUdpIp) — VpnService.Builder().establish() needs a real
- * OS-level tun interface and DatagramSocket-based forwardQuery() needs a real network, neither
- * available under Robolectric. Both are private, hence kotlin-reflect (handlePacket is also
- * `suspend`, requiring `callSuspend` rather than plain java.lang.reflect).
- *
- * JUnit4 + Robolectric's own runner, matching FocusGuardAccessibilityServiceTest — see that
- * file's header comment for why (the community JUnit5 bridge showed cross-test isolation bugs).
+ * Tests DnsVpnService's packet handling (private, reached through kotlin-reflect). Opening a real
+ * tunnel and forwarding to a real network aren't possible under Robolectric; the instrumented
+ * test covers those. Uses Robolectric's JUnit4 runner.
  */
 @RunWith(RobolectricTestRunner::class)
 class DnsVpnServiceTest {
@@ -51,9 +48,7 @@ class DnsVpnServiceTest {
 
     @Before
     fun setUp() {
-        // .get() only — .create() runs Hilt's generated injection path, which needs a real
-        // @HiltAndroidApp test Application (see FocusGuardAccessibilityServiceTest for the same
-        // reasoning). Fields are public (no visibility modifier) so they're assigned directly.
+        // get(), not create(): create() runs Hilt's injection, which needs a Hilt test app.
         service =
             Robolectric.buildService(DnsVpnService::class.java).get().apply {
                 dnsFilterEngine = DnsFilterEngine()
@@ -81,7 +76,7 @@ class DnsVpnServiceTest {
         return field.get(service) as ParcelFileDescriptor?
     }
 
-    /** Builds a minimal IPv4/UDP/DNS-query packet, the shape `handlePacket` expects. */
+    /** Builds a minimal IPv4/UDP/DNS-query packet, the shape the tunnel reads. */
     private fun buildDnsQueryPacket(
         hostname: String,
         srcPort: Int = 12_345,
@@ -102,23 +97,15 @@ class DnsVpnServiceTest {
         return packet
     }
 
-    private fun handlePacket(packet: ByteArray): ByteArray? =
-        runBlocking {
-            val function = DnsVpnService::class.declaredFunctions.first { it.name == "handlePacket" }
-            function.isAccessible = true
-            function.callSuspend(service, packet) as ByteArray?
-        }
-
     @Test
-    fun `handlePacket returns an NXDOMAIN response for a blocked hostname`() =
+    fun `a blocked lookup's reply goes back to the asking port`() =
         runTest {
             setRulesCache(listOf(WebBlockRule(domain = "blocked.example", enabled = true)))
             val packet = buildDnsQueryPacket("blocked.example", srcPort = 40_000)
 
-            val response = handlePacket(packet)
+            val response = runTunnel(packet)
 
-            assertNotNull(response)
-            val dnsResponse = Message(response!!.copyOfRange(28, response.size))
+            val dnsResponse = Message(response.copyOfRange(28, response.size))
             assertEquals(Rcode.NXDOMAIN, dnsResponse.header.rcode)
 
             // wrapInUdpIp swaps src/dst so the response routes back to the original requester:
@@ -130,34 +117,34 @@ class DnsVpnServiceTest {
         }
 
     @Test
-    fun `handlePacket ignores packets shorter than a minimum IPv4+UDP header`() {
-        val response = handlePacket(ByteArray(10))
+    fun `the tunnel ignores packets shorter than a minimum IPv4+UDP header`() {
+        val response = runTunnel(ByteArray(10))
 
-        assertNull(response)
+        assertEquals(0, response.size)
     }
 
     @Test
-    fun `handlePacket ignores non-IPv4 packets`() {
+    fun `the tunnel ignores non-IPv4 packets`() {
         val packet = buildDnsQueryPacket("example.com")
         packet[0] = 0x60 // version 6
 
-        val response = handlePacket(packet)
+        val response = runTunnel(packet)
 
-        assertNull(response)
+        assertEquals(0, response.size)
     }
 
     @Test
-    fun `handlePacket ignores non-UDP packets`() {
+    fun `the tunnel ignores non-UDP packets`() {
         val packet = buildDnsQueryPacket("example.com")
         packet[9] = 6 // TCP
 
-        val response = handlePacket(packet)
+        val response = runTunnel(packet)
 
-        assertNull(response)
+        assertEquals(0, response.size)
     }
 
     @Test
-    fun `handlePacket ignores packets not addressed to port 53`() {
+    fun `the tunnel ignores packets not addressed to port 53`() {
         val dnsQuery = Message.newQuery(Record.newRecord(Name.fromString("example.com."), Type.A, DClass.IN)).toWire()
         val packet = ByteArray(28 + dnsQuery.size)
         packet[0] = 0x45
@@ -166,20 +153,20 @@ class DnsVpnServiceTest {
         packet[23] = 80 // dst port 80, not 53
         System.arraycopy(dnsQuery, 0, packet, 28, dnsQuery.size)
 
-        val response = handlePacket(packet)
+        val response = runTunnel(packet)
 
-        assertNull(response)
+        assertEquals(0, response.size)
     }
 
     @Test
-    fun `handlePacket ignores a packet whose declared IHL exceeds the packet's actual size`() {
+    fun `the tunnel ignores a packet whose declared IHL exceeds the packet's actual size`() {
         val packet = ByteArray(28)
         packet[0] = 0x4F // version 4, IHL 15 (60-byte header) — far beyond this 28-byte packet
         packet[9] = 17
 
-        val response = handlePacket(packet)
+        val response = runTunnel(packet)
 
-        assertNull(response)
+        assertEquals(0, response.size)
     }
 
     @Test
@@ -194,21 +181,87 @@ class DnsVpnServiceTest {
     }
 
     @Test
-    fun `handlePacket ignores a DNS payload it can't parse`() {
+    fun `a start command that can't establish the tunnel stops the service`() {
+        setTunInterface(null)
+
+        service.onStartCommand(Intent(), 0, 1)
+
+        assertNull(getTunInterface())
+        assertTrue(shadowOf(service).isStoppedBySelf)
+    }
+
+    /** Feeds [packets] through the tunnel read loop until end of stream; returns what it wrote back. */
+    private fun runTunnel(vararg packets: ByteArray): ByteArray {
+        val input = packets.fold(ByteArray(0)) { acc, p -> acc + p }
+        val tunnel = File.createTempFile("tun", ".bin").apply { writeBytes(input) }
+        val pfd = ParcelFileDescriptor.open(tunnel, ParcelFileDescriptor.MODE_READ_WRITE)
+        runBlocking {
+            val loop = DnsVpnService::class.declaredFunctions.first { it.name == "runDnsLoop" }
+            loop.isAccessible = true
+            withTimeout(5_000) { loop.callSuspend(service, pfd, this) }
+        }
+        pfd.close()
+        return tunnel.readBytes().copyOfRange(input.size, tunnel.length().toInt()).also { tunnel.delete() }
+    }
+
+    @Test
+    fun `the tunnel answers a blocked lookup with NXDOMAIN without asking upstream`() {
+        setRulesCache(listOf(WebBlockRule(domain = "blocked.example", enabled = true)))
+        var upstreamCalls = 0
+        service.upstream = {
+            upstreamCalls++
+            null
+        }
+
+        val reply = runTunnel(buildDnsQueryPacket("blocked.example"))
+
+        assertEquals(Rcode.NXDOMAIN, Message(reply.copyOfRange(28, reply.size)).header.rcode)
+        assertEquals(0, upstreamCalls)
+    }
+
+    @Test
+    fun `the tunnel forwards an allowed lookup upstream and relays the answer back to the asker`() {
+        setRulesCache(listOf(WebBlockRule(domain = "blocked.example", enabled = true)))
+        val query = buildDnsQueryPacket("allowed.example", srcPort = 41_000)
+        var forwarded: ByteArray? = null
+        service.upstream = { payload ->
+            forwarded = payload
+            Message(payload).apply { header.setFlag(Flags.QR.toInt()) }.toWire()
+        }
+
+        val reply = runTunnel(query)
+
+        assertTrue(forwarded!!.contentEquals(query.copyOfRange(28, query.size)))
+        val answer = Message(reply.copyOfRange(28, reply.size))
+        assertEquals(Rcode.NOERROR, answer.header.rcode)
+        assertEquals("allowed.example.", answer.question.name.toString())
+        val dstPort = ((reply[22].toInt() and 0xFF) shl 8) or (reply[23].toInt() and 0xFF)
+        assertEquals(41_000, dstPort)
+    }
+
+    @Test
+    fun `a lookup the upstream resolver doesn't answer gets no reply`() {
+        service.upstream = { null }
+
+        assertEquals(0, runTunnel(buildDnsQueryPacket("allowed.example")).size)
+    }
+
+    @Test
+    fun `the tunnel ignores a DNS payload it can't parse`() {
         val packet = buildDnsQueryPacket("example.com")
         // Corrupt the DNS section so dnsjava can't parse it.
         for (i in 28 until packet.size) packet[i] = 0xFF.toByte()
 
-        assertNull(handlePacket(packet))
+        assertEquals(0, runTunnel(packet).size)
     }
 
     @Test
-    fun `handlePacket ignores a DNS message with no question`() {
+    fun `the tunnel ignores a DNS message with no question`() {
         val noQuestion = Message().toWire()
         val packet = buildDnsQueryPacket("example.com").copyOf(28 + noQuestion.size)
         System.arraycopy(noQuestion, 0, packet, 28, noQuestion.size)
 
-        assertNull(handlePacket(packet))
+        assertEquals(0, runTunnel(packet).size)
     }
 
     @Test
@@ -219,11 +272,6 @@ class DnsVpnServiceTest {
 
         assertEquals(android.app.Service.START_NOT_STICKY, result)
     }
-
-    // forwardQuery() is not practically unit-testable: it calls protect(DatagramSocket), but
-    // ShadowVpnService only shadows protect(java.net.Socket) — the unshadowed overload falls
-    // through to real framework code that needs a live VPN binder. Covered instead by the
-    // real-device instrumented test.
 
     @Test
     fun `onDestroy cancels the scope and closes a non-null tunInterface`() {

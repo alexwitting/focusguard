@@ -16,10 +16,8 @@ class AndroidApplicationConventionPlugin : Plugin<Project> {
                     targetSdk = 35
                     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
                 }
-                // One debug key for everyone: a CI-built debug APK and one built on any machine
-                // used to be signed with different auto-generated keys, so installing one over the
-                // other failed with INSTALL_FAILED_UPDATE_INCOMPATIBLE. The key is debug-only and
-                // uses Android's standard public debug passwords — it is not a secret.
+                // Shared debug key so debug APKs from CI and any machine install over each other.
+                // Debug-only, with Android's standard public debug passwords; not a secret.
                 signingConfigs.getByName("debug") {
                     storeFile = rootProject.file("config/signing/debug.keystore")
                     storePassword = "android"

@@ -25,7 +25,7 @@ internal fun PinDialog(
                         PinAction.None -> "Needed to change your rules"
                     }
             PinStep.EnterNew -> "Choose a PIN" to "6 digits. You'll need it to change any rule."
-            PinStep.ConfirmNew -> "Enter it again" to "Just to make sure"
+            PinStep.ConfirmNew -> "Enter it again" to "Confirm your new PIN"
             PinStep.Hidden -> "" to ""
         }
 

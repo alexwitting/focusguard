@@ -12,12 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 
-/**
- * Centered title (+ optional icon and subtitle), used wherever a list/tab has nothing to show.
- * Callers are responsible for centering this within their own layout (a `Box` with
- * `fillMaxSize`/`fillMaxWidth` and `contentAlignment = Alignment.Center`, or equivalent), since
- * that varies with the surrounding container (plain screen body vs. a LazyColumn item).
- */
+/** Title with optional icon and subtitle for an empty list. Callers centre it in their layout. */
 @Composable
 fun EmptyState(
     title: String,

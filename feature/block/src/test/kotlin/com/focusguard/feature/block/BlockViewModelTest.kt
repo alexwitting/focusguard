@@ -1,7 +1,9 @@
 package com.focusguard.feature.block
 
 import app.cash.turbine.test
+import com.focusguard.core.domain.model.AppBlockRule
 import com.focusguard.core.domain.model.BlockingStrategy
+import com.focusguard.core.domain.model.ContentFilter
 import com.focusguard.core.domain.model.SystemHealth
 import com.focusguard.core.domain.model.WebBlockRule
 import com.focusguard.core.domain.usecase.block.DeleteAppBlockRuleUseCase
@@ -31,8 +33,10 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkStatic
 import io.mockk.unmockkStatic
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -76,6 +80,7 @@ class BlockViewModelTest {
     private fun createViewModel(
         getAllAppsOverride: GetAllAppsWithRulesUseCase? = null,
         upsertWebOverride: UpsertWebBlockRuleUseCase? = null,
+        enableScanOverride: EnableWebContentBlockingUseCase? = null,
     ): BlockViewModel =
         BlockViewModel(
             getAllAppsWithRules = getAllAppsOverride ?: GetAllAppsWithRulesUseCase(blockRuleRepository),
@@ -91,7 +96,7 @@ class BlockViewModelTest {
             getDailyUsage = GetDailyUsageUseCase(usageRepository),
             clockProvider = clockProvider,
             getWebContentBlockingEnabled = GetWebContentBlockingEnabledUseCase(settingsRepository),
-            enableWebContentBlocking = EnableWebContentBlockingUseCase(settingsRepository),
+            enableWebContentBlocking = enableScanOverride ?: EnableWebContentBlockingUseCase(settingsRepository),
             getSystemHealth = GetSystemHealthUseCase(systemHealthRepository),
         )
 
@@ -160,6 +165,22 @@ class BlockViewModelTest {
             viewModel.onIntent(BlockIntent.SubmitPin)
 
             assertEquals("Incorrect PIN", viewModel.state.value.pinError)
+            assertTrue(viewModel.state.value.pinRequired)
+            assertNull(blockRuleRepository.getAppBlockRule("com.app").first())
+        }
+
+    @Test
+    fun `a PIN check that throws shows an error instead of crashing and runs nothing`() =
+        runTest {
+            pinRepository.setPin("123456")
+            pinRepository.failVerify = true
+            val viewModel = createViewModel()
+            viewModel.onIntent(BlockIntent.SetAppStrategy("com.app", "App", BlockingStrategy.AlwaysBlock))
+
+            viewModel.onIntent(BlockIntent.PinInputChanged("123456"))
+            viewModel.onIntent(BlockIntent.SubmitPin)
+
+            assertEquals("Couldn't check the PIN. Try again.", viewModel.state.value.pinError)
             assertTrue(viewModel.state.value.pinRequired)
             assertNull(blockRuleRepository.getAppBlockRule("com.app").first())
         }
@@ -270,7 +291,7 @@ class BlockViewModelTest {
 
             viewModel.effects.test {
                 viewModel.onIntent(BlockIntent.AddWebRule("reddit.com", blockSubdomains = true))
-                assertEquals(BlockEffect.ShowSnackbar("Failed: boom"), awaitItem())
+                assertEquals(BlockEffect.ShowSnackbar("Couldn't save the change"), awaitItem())
             }
         }
 
@@ -284,7 +305,7 @@ class BlockViewModelTest {
             viewModel.effects.test {
                 viewModel.onIntent(BlockIntent.PinInputChanged("123456"))
                 viewModel.onIntent(BlockIntent.SubmitPin)
-                assertEquals(BlockEffect.ShowSnackbar("Failed: boom"), awaitItem())
+                assertEquals(BlockEffect.ShowSnackbar("Couldn't save the change"), awaitItem())
             }
             assertFalse(viewModel.state.value.pinRequired)
         }
@@ -297,5 +318,130 @@ class BlockViewModelTest {
             val viewModel = createViewModel(getAllAppsOverride = failingApps)
 
             assertFalse(viewModel.state.value.isLoading)
+        }
+
+    @Test
+    fun `the app list splits into blocked and unblocked apps, and search narrows it`() =
+        runTest {
+            blockRuleRepository.setInstalledApps("com.instagram.android" to "Instagram", "com.maps" to "Maps", "com.insight" to "Insight")
+            blockRuleRepository.setRules(AppBlockRule(packageName = "com.instagram.android", label = "Instagram", strategy = BlockingStrategy.AlwaysBlock))
+            val viewModel = createViewModel()
+
+            viewModel.onIntent(BlockIntent.SelectTab(BlockTab.APPS))
+            assertEquals(
+                listOf("com.instagram.android"),
+                viewModel.state.value.blockedApps
+                    .map { it.packageName },
+            )
+            assertEquals(
+                listOf("com.insight", "com.maps"),
+                viewModel.state.value.unblockedApps
+                    .map { it.packageName },
+            )
+            assertEquals(3, viewModel.state.value.filteredApps.size)
+
+            viewModel.onIntent(BlockIntent.SearchQueryChanged("INS"))
+            assertEquals(
+                listOf("Insight", "Instagram"),
+                viewModel.state.value.filteredApps
+                    .map { it.label },
+            )
+
+            viewModel.onIntent(BlockIntent.SearchQueryChanged("zzz"))
+            assertTrue(
+                viewModel.state.value.filteredApps
+                    .isEmpty(),
+            )
+
+            viewModel.onIntent(BlockIntent.SelectTab(BlockTab.CONTENT))
+            assertEquals(BlockTab.CONTENT, viewModel.state.value.selectedTab)
+        }
+
+    @Test
+    fun `removing rules and switching filters apply straight away without a PIN`() =
+        runTest {
+            blockRuleRepository.setRules(AppBlockRule(packageName = "com.app", label = "App", strategy = BlockingStrategy.AlwaysBlock))
+            webBlockRuleRepository.setRules(WebBlockRule(domain = "reddit.com"))
+            val viewModel = createViewModel()
+
+            viewModel.onIntent(BlockIntent.RemoveAppRule("com.app"))
+            viewModel.onIntent(BlockIntent.RemoveWebRule("reddit.com"))
+            viewModel.onIntent(BlockIntent.ToggleContentFilter(ContentFilter.REELS, enabled = true))
+
+            assertNull(blockRuleRepository.getAppBlockRule("com.app").first())
+            assertTrue(
+                viewModel.state.value.webRules
+                    .isEmpty(),
+            )
+            assertEquals(setOf(ContentFilter.REELS), viewModel.state.value.activeFilters)
+        }
+
+    @Test
+    fun `with a PIN, removing rules and switching filters each wait for the PIN`() =
+        runTest {
+            pinRepository.setPin("123456")
+            blockRuleRepository.setRules(AppBlockRule(packageName = "com.app", label = "App", strategy = BlockingStrategy.AlwaysBlock))
+            webBlockRuleRepository.setRules(WebBlockRule(domain = "reddit.com"))
+            val viewModel = createViewModel()
+            val unlock = {
+                viewModel.onIntent(BlockIntent.PinInputChanged("123456"))
+                viewModel.onIntent(BlockIntent.SubmitPin)
+            }
+
+            viewModel.onIntent(BlockIntent.RemoveAppRule("com.app"))
+            assertTrue(viewModel.state.value.pinRequired)
+            assertEquals("com.app", blockRuleRepository.getAppBlockRule("com.app").first()?.packageName)
+            unlock()
+            assertNull(blockRuleRepository.getAppBlockRule("com.app").first())
+
+            viewModel.onIntent(BlockIntent.RemoveWebRule("reddit.com"))
+            assertEquals(1, viewModel.state.value.webRules.size)
+            unlock()
+            assertTrue(
+                viewModel.state.value.webRules
+                    .isEmpty(),
+            )
+
+            viewModel.onIntent(BlockIntent.ToggleContentFilter(ContentFilter.SHORTS, enabled = true))
+            assertTrue(
+                viewModel.state.value.activeFilters
+                    .isEmpty(),
+            )
+            unlock()
+            assertEquals(setOf(ContentFilter.SHORTS), viewModel.state.value.activeFilters)
+            assertFalse(viewModel.state.value.pinRequired)
+        }
+
+    @Test
+    fun `a second submit while the PIN is still being checked counts once`() =
+        runTest {
+            pinRepository.setPin("123456")
+            val viewModel = createViewModel()
+            viewModel.onIntent(BlockIntent.SetAppStrategy("com.app", "App", BlockingStrategy.AlwaysBlock))
+            viewModel.onIntent(BlockIntent.PinInputChanged("000000"))
+            val gate = CompletableDeferred<Unit>()
+            pinRepository.verifyGate = gate
+
+            viewModel.onIntent(BlockIntent.SubmitPin)
+            viewModel.onIntent(BlockIntent.SubmitPin)
+            gate.complete(Unit)
+            advanceUntilIdle()
+
+            assertEquals(1, pinRepository.getLockout().failedAttempts)
+        }
+
+    @Test
+    fun `if the browser scan can't be turned on, the screen says so and still flags the sites`() =
+        runTest {
+            systemHealthRepository.setSystemHealth(SystemHealth(accessibilityServiceActive = true, vpnServiceActive = false))
+            webBlockRuleRepository.setRules(WebBlockRule(domain = "reddit.com"))
+            val failing = mockk<EnableWebContentBlockingUseCase> { coEvery { this@mockk() } throws IllegalStateException("disk") }
+            val viewModel = createViewModel(enableScanOverride = failing)
+
+            viewModel.effects.test {
+                viewModel.onIntent(BlockIntent.EnableBrowserScan)
+                assertEquals(BlockEffect.ShowSnackbar("Couldn't turn on the browser scan"), awaitItem())
+            }
+            assertTrue(viewModel.state.value.websitesUnprotected)
         }
 }

@@ -5,7 +5,6 @@ import android.app.UiAutomation
 import android.content.Intent
 import android.os.ParcelFileDescriptor
 import android.provider.Settings
-import android.view.accessibility.AccessibilityNodeInfo
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
@@ -18,49 +17,23 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
+import org.junit.BeforeClass
 import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Real-device/emulator stability tests — the OS instantiates FocusGuardAccessibilityService for
- * real, running actual Hilt injection and real accessibility-service registration, none of which
- * Robolectric's simulated framework can validate. See FocusGuardAccessibilityServiceTest (JVM
- * unit tests) for the decision-logic coverage; this file is specifically about OS integration.
+ * On-device tests of the accessibility service's OS integration: real Hilt injection, real
+ * registration and binding, real event dispatch. Decision logic is covered by the JVM tests.
  *
- * `enabled_accessibility_services`/`accessibility_enabled` are written directly via a shell
- * command (`executeShellCommand`, running as the `shell` UID which holds WRITE_SECURE_SETTINGS)
- * — the standard, documented way to grant this from an instrumented test process without a UI
- * confirmation dialog.
- *
- * Getting the UiAutomation instance via `Instrumentation.getUiAutomation(FLAG_DONT_SUPPRESS_
- * ACCESSIBILITY_SERVICES)` rather than the no-args `instrumentation.uiAutomation` property is
- * load-bearing, not cosmetic: with the default flags, registering a UiAutomation client tells
- * AccessibilityManagerService to suppress every *other* accessibility service for the duration of
- * the connection (avoids event-stream conflicts for typical UI-testing use). Without this flag,
- * the settings write correctly (dumpsys shows the component under "Enabled services"), but AMS
- * never moves it into "Bound services" — it sits enabled-but-never-bound indefinitely.
- *
- * `enableService()` runs in `@Before` for every test and is idempotent (re-writing the same
- * settings value while already enabled is a no-op for AMS, not a destroy+recreate) — the service
- * is enabled once and stays enabled across the whole class, torn down only in `@AfterClass`.
- * Destroying and recreating the service is real OS-level work (onDestroy() cancels serviceScope;
- * onCreate()/onServiceConnected() re-open the same singleton DataStore-backed Flows), and
- * cancellation is cooperative, so doing that between every single test can race a still-unwinding
- * collector from the outgoing instance against a fresh collector from the new one, both briefly
- * touching the same DataStore file (crashes with "multiple DataStores active for the same file").
- * Keeping one long-lived instance for most scenarios — matching how a real device actually
- * behaves, since accessibility services aren't normally toggled on/off repeatedly — confines that
- * destroy/recreate race to the one test that actually needs to exercise it.
- *
- * core:system's androidTest source set produces a *self-instrumenting* test APK: the service
- * under test and this test code share one applicationId. That matters for
- * `realWindowStateEventFromAnotherAppUpdatesForegroundPackage` below — `onAccessibilityEvent`
- * deliberately ignores events whose package equals the service's own (`pkg == packageName`), so a
- * same-package probe activity would never generate an observable event here. The real Settings
- * app (guaranteed present on every AVD/device, unlike anything from this test APK) is used
- * instead to get a genuinely different foreground package.
+ * - The service is enabled by writing secure settings through a shell command.
+ * - UiAutomation is obtained with FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES; without it the
+ *   system never binds other accessibility services while the test is connected.
+ * - The service is enabled once and kept for the whole class, because destroying and recreating
+ *   it between tests can briefly run two DataStore collectors on the same file.
+ * - Test code and service share one package, and the service ignores its own package's events,
+ *   so the system Settings app provides the "other app" window.
  */
 @HiltAndroidTest
 class FocusGuardAccessibilityServiceInstrumentedTest {
@@ -69,11 +42,7 @@ class FocusGuardAccessibilityServiceInstrumentedTest {
 
     @Before
     fun setUp() {
-        // Re-issuing the identical `settings put secure enabled_accessibility_services` value is
-        // NOT a no-op — AMS unbinds/rebinds the service on every write regardless of whether the
-        // value actually changed, destroying and recreating the instance. Skipping the write when
-        // already bound is what actually makes "one long-lived instance for most of the class"
-        // true; see the class header for why that matters.
+        // Every settings write rebinds the service, so skip it when already bound.
         if (FocusGuardAccessibilityService.instance == null) {
             enableService()
             awaitCondition(timeoutMs = 15_000) { FocusGuardAccessibilityService.instance != null }
@@ -108,10 +77,7 @@ class FocusGuardAccessibilityServiceInstrumentedTest {
         ActivityScenario.launch(AccessibilityProbeActivity::class.java).use { scenario ->
             awaitCondition(timeoutMs = 15_000) { scenario.state == Lifecycle.State.RESUMED }
 
-            // Robolectric's ShadowAccessibilityService only *records* this call (see the JVM
-            // unit test's globalActionsPerformed assertions) — it never executes it. Here the
-            // real window manager receives it, so a real back-navigation is the only way to
-            // observe it: the probe activity, launched as its task's root, finishes.
+            // A real back navigation finishes the probe activity, which is its task's root.
             service.performGlobalAction(GLOBAL_ACTION_BACK)
 
             awaitCondition(timeoutMs = 15_000) { scenario.state == Lifecycle.State.DESTROYED }
@@ -119,28 +85,18 @@ class FocusGuardAccessibilityServiceInstrumentedTest {
     }
 
     @Test
-    fun collectNodeSignalsWalksARealRenderedWindow() {
+    fun selectedNodeSignalsWalksARealRenderedWindow() {
         val service = FocusGuardAccessibilityService.instance!!
 
         ActivityScenario.launch(AccessibilityProbeActivity::class.java).use {
-            awaitCondition(timeoutMs = 15_000) { "probe" in collectNodeSignals(service) }
+            awaitCondition(timeoutMs = 15_000) { "probe" in service.rootInActiveWindow.selectedNodeSignals() }
         }
     }
 
     /**
-     * Ignored: this scenario reliably reproduces a real DataStore race, not test flakiness in the
-     * usual sense. Disabling and re-enabling the accessibility service in quick succession
-     * destroys the outgoing instance's onServiceConnected() DataStore-backed Flow collectors
-     * while starting a fresh instance's own collectors, and DataStore's internal
-     * storage-connection teardown runs asynchronously behind any signal the caller can observe
-     * (it can be re-entered before the previous connection's file lock releases) — waiting for
-     * `instance == null`, waiting for the outgoing serviceScope's child coroutines to report
-     * completed, and adding a fixed real-time settle buffer on top of both are all insufficient.
-     * This is a real product question, not just a test artifact — rapidly toggling the
-     * accessibility service off/on for real could crash the app the same way outside of tests —
-     * worth a follow-up investigation (e.g. a debounce on DataStore-consuming Flow (re)collection
-     * in onServiceConnected(), or confirming this is a known upstream DataStore issue) separate
-     * from this test file.
+     * Ignored: quickly disabling and re-enabling the service tears down and restarts its
+     * DataStore collectors, and DataStore's asynchronous teardown can still hold the file when the
+     * new instance opens it ("multiple DataStores active for the same file").
      */
     @Test
     @Ignore("Reproducible DataStore race on rapid disable/re-enable — see doc comment")
@@ -155,23 +111,6 @@ class FocusGuardAccessibilityServiceInstrumentedTest {
 
         enableService()
         awaitCondition(timeoutMs = 15_000) { FocusGuardAccessibilityService.instance != null }
-    }
-
-    /**
-     * Invokes the real private collectNodeSignals(rootInActiveWindow) directly rather than going
-     * through onAccessibilityEvent — the probe activity shares this test APK's package, and
-     * onAccessibilityEvent ignores same-package events (see class header), which would make the
-     * real node-tree walk unobservable through the normal event-dispatch path.
-     */
-    private fun collectNodeSignals(service: FocusGuardAccessibilityService): Set<String> {
-        val method =
-            FocusGuardAccessibilityService::class.java.getDeclaredMethod(
-                "collectNodeSignals",
-                AccessibilityNodeInfo::class.java,
-            )
-        method.isAccessible = true
-        @Suppress("UNCHECKED_CAST")
-        return method.invoke(service, service.rootInActiveWindow) as Set<String>
     }
 
     private fun foregroundPkg(service: FocusGuardAccessibilityService): String {
@@ -196,11 +135,32 @@ class FocusGuardAccessibilityServiceInstrumentedTest {
         private val serviceComponent =
             "${context.packageName}/${FocusGuardAccessibilityService::class.java.name}"
 
+        private var savedServices: String? = null
+        private var savedEnabled: String? = null
+
+        /** Saves the device's accessibility settings so the tests can put them back. */
+        @JvmStatic
+        @BeforeClass
+        fun saveAccessibilitySettings() {
+            savedServices = readSetting("enabled_accessibility_services")
+            savedEnabled = readSetting("accessibility_enabled")
+        }
+
         @JvmStatic
         @AfterClass
-        fun disableAccessibilityGlobally() {
-            disableService()
-            runShell("settings put secure accessibility_enabled 0")
+        fun restoreAccessibilitySettings() {
+            restoreSetting("enabled_accessibility_services", savedServices)
+            restoreSetting("accessibility_enabled", savedEnabled)
+        }
+
+        /** The secure setting's value, or null when it isn't set. */
+        private fun readSetting(name: String): String? = runShell("settings get secure $name").trim().takeUnless { it.isEmpty() || it == "null" }
+
+        private fun restoreSetting(
+            name: String,
+            value: String?,
+        ) {
+            runShell(if (value == null) "settings delete secure $name" else "settings put secure $name $value")
         }
 
         private fun enableService() {
@@ -212,9 +172,9 @@ class FocusGuardAccessibilityServiceInstrumentedTest {
             runShell("settings delete secure enabled_accessibility_services")
         }
 
-        private fun runShell(command: String) {
+        private fun runShell(command: String): String {
             val stream = ParcelFileDescriptor.AutoCloseInputStream(uiAutomation.executeShellCommand(command))
-            stream.use { it.readBytes() }
+            return stream.use { it.readBytes().decodeToString() }
         }
 
         /** Polls real wall-clock time — no simulated looper to idle against real OS dispatch. */

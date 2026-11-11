@@ -23,8 +23,6 @@ class AppBlockRuleRepositoryImpl
     ) : BlockRuleRepository {
         override fun getAppBlockRules(): Flow<List<AppBlockRule>> = dao.getAll().map { entities -> entities.map { it.toDomain() } }
 
-        override fun getAppBlockRule(packageName: String): Flow<AppBlockRule?> = dao.getByPackageName(packageName).map { it?.toDomain() }
-
         override fun getAllAppsWithRules(): Flow<List<AppWithRule>> =
             dao
                 .getAll()

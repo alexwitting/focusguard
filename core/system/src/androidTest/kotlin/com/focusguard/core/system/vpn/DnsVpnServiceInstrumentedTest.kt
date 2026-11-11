@@ -6,10 +6,8 @@ import org.junit.Rule
 import org.junit.Test
 
 /**
- * Real-device/emulator stability tests — the OS establishes a real VPN tunnel and runs real
- * FileInputStream/FileOutputStream I/O against it, neither achievable under Robolectric (see
- * DnsVpnServiceTest's header comment). See DnsVpnServiceTest (JVM unit tests) for the
- * packet-decision-logic coverage; this file is specifically about OS integration.
+ * On-device tests of the VPN's OS integration: a real tunnel and real reads and writes on it.
+ * Packet handling is covered by DnsVpnServiceTest.
  */
 @HiltAndroidTest
 class DnsVpnServiceInstrumentedTest {

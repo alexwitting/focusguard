@@ -22,8 +22,7 @@ data class OnboardingState(
             batteryOptimizationIgnored = false,
             exactAlarmAllowed = false,
         ),
-    // Steps where the user has already tapped "Grant access" at least once.
-    // Used to show "Continue anyway" so users are never permanently blocked.
+    // Steps where the user has tapped "Grant access"; these offer "Continue anyway".
     val attemptedSteps: Set<OnboardingStep> = emptySet(),
 ) {
     /** Whether [step]'s permission is granted. WELCOME and DONE have none, so they're always true. */
@@ -50,9 +49,8 @@ sealed interface OnboardingEffect {
     data object OpenExactAlarmSettings : OnboardingEffect
 
     /**
-     * FocusGuard's own App info page. On Android 13+ a sideloaded app's accessibility switch is
-     * greyed out as a "restricted setting" until the user picks "Allow restricted settings" from
-     * this page's overflow menu — no API can lift that restriction for them.
+     * FocusGuard's App info page. On Android 13+ a sideloaded app's accessibility switch stays
+     * greyed out until the user picks "Allow restricted settings" from its overflow menu.
      */
     data object OpenAppDetailsSettings : OnboardingEffect
 

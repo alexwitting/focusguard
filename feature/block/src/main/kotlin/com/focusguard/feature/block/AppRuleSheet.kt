@@ -56,9 +56,9 @@ private enum class StrategyOption(
     val title: String,
     val description: String,
 ) {
-    ALWAYS("Always block", "Never opens until you remove the rule"),
-    TIME_LIMIT("Daily time limit", "Blocks once today's allowance runs out"),
-    SCHEDULED("Allowed hours", "Only opens during the hours you choose"),
+    ALWAYS("Always block", "Blocked at all times"),
+    TIME_LIMIT("Daily time limit", "Blocked once today's limit is used up"),
+    SCHEDULED("Allowed hours", "Blocked outside the hours you choose"),
 }
 
 private const val LIMIT_STEP_MINUTES = 5
@@ -97,6 +97,7 @@ internal fun AppStrategySheet(
     var startMinute by remember { mutableIntStateOf(window?.startMinute ?: 0) }
     var endHour by remember { mutableIntStateOf(window?.endHour ?: 17) }
     var endMinute by remember { mutableIntStateOf(window?.endMinute ?: 0) }
+    val emptyWindow = selected == StrategyOption.SCHEDULED && startHour == endHour && startMinute == endMinute
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -156,12 +157,14 @@ internal fun AppStrategySheet(
                         }
                         Spacer(Modifier.height(14.dp))
                         DayOfWeekPicker(selected = days, onChange = { days = it })
-                        Spacer(Modifier.height(10.dp))
-                        Text(
-                            "Blocked outside these hours.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        if (emptyWindow) {
+                            Spacer(Modifier.height(10.dp))
+                            Text(
+                                "Start and end times must differ.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
                     }
                 StrategyOption.ALWAYS -> Unit
             }
@@ -180,6 +183,7 @@ internal fun AppStrategySheet(
                             },
                         )
                     },
+                    enabled = !emptyWindow,
                     modifier = Modifier.fillMaxWidth().height(52.dp),
                     colors =
                         ButtonDefaults.buttonColors(

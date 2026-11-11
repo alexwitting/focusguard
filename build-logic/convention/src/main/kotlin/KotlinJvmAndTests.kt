@@ -21,9 +21,7 @@ internal fun Project.configureKotlinJvmAndTests() {
 
     tasks.withType<Test>().configureEach {
         useJUnitPlatform()
-        // Explicit ceiling instead of the JVM's default heap-sizing heuristic, which
-        // is computed from memory available at process launch and is unreliable on a
-        // host where other apps are already competing for RAM.
+        // Fixed test heap rather than the JVM's default, which depends on free memory at launch.
         maxHeapSize = "1g"
     }
 

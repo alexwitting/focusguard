@@ -21,10 +21,8 @@ data class WeeklyTotalRow(
 )
 
 /**
- * Per-app usage rows are whole minutes (integer division), so an app opened for a few seconds
- * would otherwise come back as a "0m" row — listed on Home, and filling the weekly top-N slots
- * ahead of real usage. Apps below one minute are left out of per-app results entirely. Daily
- * totals (getWeeklyTotals) still sum every session, so seconds aren't lost from screen time.
+ * Per-app rows are whole minutes, so apps used for under a minute are left out of per-app
+ * results. Daily totals still include every session.
  */
 private const val MIN_LISTED_USAGE_MS = 60_000
 
@@ -120,10 +118,7 @@ interface UsageDao {
     @Query("DELETE FROM extension_records WHERE date < :beforeEpochDay")
     suspend fun deleteExtensionsBefore(beforeEpochDay: Long): Int
 
-    /**
-     * Drops everything dated before [beforeEpochDay] in one transaction. Without this every poll
-     * and every block added rows forever, while the app only ever reads the last week or so.
-     */
+    /** Deletes sessions, blocked attempts and extension records dated before [beforeEpochDay]. */
     @Transaction
     suspend fun pruneBefore(beforeEpochDay: Long) {
         deleteSessionsBefore(beforeEpochDay)

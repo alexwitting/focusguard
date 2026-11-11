@@ -9,11 +9,8 @@ plugins {
 android {
     namespace = "com.focusguard.core.system"
     defaultConfig {
-        // Overrides AndroidLibraryConventionPlugin's default runner — instrumented tests here
-        // let the real OS instantiate the @AndroidEntryPoint service classes, which runs the
-        // real Hilt-generated injection path in onCreate() and needs a Hilt-capable test
-        // Application (HiltTestApplication), unlike the unit tests which deliberately bypass
-        // Hilt entirely (see FocusGuardAccessibilityServiceTest/DnsVpnServiceTest headers).
+        // Instrumented tests let the OS create the real @AndroidEntryPoint services, which needs
+        // a Hilt test application.
         testInstrumentationRunner = "com.focusguard.core.system.HiltTestRunner"
     }
 }
@@ -38,22 +35,15 @@ dependencies {
     testImplementation(libs.androidx.test.core)
     testImplementation(libs.robolectric.junit5.extension)
     testImplementation(libs.workmanager.testing)
-    // JUnit4 + vintage engine — Robolectric's own test runner is JUnit4-native and the
-    // community JUnit5 bridge showed cross-test isolation issues on FocusGuardAccessibilityServiceTest
-    // (assertions passed alone, failed as part of the class — see that file's header comment).
-    // Scoped to files that opt in via @RunWith(RobolectricTestRunner::class); everything else
-    // in this module stays on JUnit5/Jupiter.
+    // JUnit4 + vintage engine for files using Robolectric's own runner, which isolates tests
+    // better than the JUnit5 bridge. Everything else stays on JUnit5.
     testImplementation(libs.junit)
     testRuntimeOnly(libs.junit5.vintage.engine)
-    // Lets tests call DnsVpnService's private suspend fun handlePacket() via reflection
-    // (KCallable.callSuspend) — the packet-decision logic isn't exposed any other way, and
-    // that's the only part of the class testable without a real OS-level VPN interface.
+    // Lets tests call DnsVpnService's private suspend handlePacket() through reflection.
     testImplementation(libs.kotlin.reflect)
 
-    // Instrumented tests (connectedAndroidTest) for FocusGuardAccessibilityService/DnsVpnService
-    // — real OS-level stability confidence Robolectric can't provide (real accessibility-service
-    // registration, real event dispatch, real VPN consent). Uses the real production Hilt graph,
-    // not fakes, since the point is genuine OS+DI integration confidence.
+    // Instrumented tests of the accessibility and VPN services against the real OS and the
+    // production Hilt graph.
     androidTestImplementation(libs.hilt.android.testing)
     kspAndroidTest(libs.hilt.compiler)
     androidTestImplementation(libs.androidx.junit)
@@ -66,9 +56,9 @@ dependencies {
 
 kover {
     reports {
-        // Regression gate, not a target — see :core:domain's build.gradle.kts for why.
+        // Fails CI below 90% line coverage.
         verify {
-            rule { minBound(84) }
+            rule { minBound(90) }
         }
     }
 }

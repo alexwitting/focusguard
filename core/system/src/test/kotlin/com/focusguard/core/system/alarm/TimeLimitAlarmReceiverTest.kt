@@ -13,12 +13,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
-/**
- * Every real Android SDK method throws under a plain JVM unit test (no
- * `unitTests.isReturnDefaultValues`, matching PinRepositoryImplTest's precedent) — so both the
- * received [Intent] and the fallback-path `blockIntent` built internally must be mocked, never
- * constructed for real.
- */
+/** Android SDK classes throw in plain JVM tests, so the intents involved are mocked. */
 class TimeLimitAlarmReceiverTest {
     private val context = mockk<Context>()
     private val receiver = TimeLimitAlarmReceiver()
@@ -38,10 +33,8 @@ class TimeLimitAlarmReceiverTest {
     }
 
     /**
-     * [FocusGuardAccessibilityService.instance] has a private setter — only its own
-     * onCreate/onDestroy assign it. The `@Volatile` backing field is hoisted by the Kotlin
-     * compiler onto the outer class as a static field (the Companion class only holds the
-     * getter), so reflection targets the outer class here, not `Companion`.
+     * Sets [FocusGuardAccessibilityService.instance] through reflection. Its backing field is a
+     * static on the outer class, not on Companion.
      */
     private fun setServiceInstance(service: FocusGuardAccessibilityService?) {
         val field = FocusGuardAccessibilityService::class.java.getDeclaredField("instance")

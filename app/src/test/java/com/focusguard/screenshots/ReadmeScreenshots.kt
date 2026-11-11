@@ -35,12 +35,9 @@ import java.time.DayOfWeek
 import java.time.LocalDate
 
 /**
- * Renders the real Home and Block screens with sample data and saves them as the README's
- * screenshots. Not a regression test: it's skipped unless Gradle is run with
- * `-PrecordScreenshots` (see app/build.gradle.kts), so normal `test` runs stay fast.
- *
- * Plain [Application] instead of FocusGuardApplication: these are stateless composables, and
- * booting Hilt/WorkManager under Robolectric would add nothing but failure modes.
+ * Renders the Home and Block screens with sample data and saves them as the README screenshots.
+ * Skipped unless Gradle runs with `-PrecordScreenshots` (see app/build.gradle.kts). Uses a plain
+ * [Application] since these composables need no Hilt or WorkManager.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -83,7 +80,7 @@ class ReadmeScreenshots {
         }
     }
 
-    // ── Sample data (mirrors the redesign mockups) ───────────────────────────
+    // ── Sample data ──────────────────────────────────────────────────────────
 
     private fun sampleHomeState(): HomeState {
         // HomeContent highlights the bar whose date is today, so anchor the week to now.

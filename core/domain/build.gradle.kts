@@ -13,14 +13,14 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.turbine)
     testImplementation(libs.mockk)
+    testImplementation(project(":core:testing"))
 }
 
-// Regression gate, not a target: set just below the currently-measured line coverage so this
-// catches an accidental coverage drop without blocking `check`/CI or chasing a number upward.
+// Fails CI below 90% line coverage.
 kover {
     reports {
         verify {
-            rule { minBound(85) }
+            rule { minBound(90) }
         }
     }
 }

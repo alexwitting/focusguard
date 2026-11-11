@@ -26,9 +26,8 @@ class TimeLimitScheduler
         ) = scheduleBlockIn(packageName, label, remainingMinutes * MILLIS_PER_MINUTE, BlockReason.TIME_LIMIT_REACHED)
 
         /**
-         * Blocks [packageName] for [reason] after [delayMillis] — a time limit running out, an
-         * allowed-hours window closing, or bedtime starting while the app is open. One alarm per
-         * package: scheduling again replaces it, so callers pass whichever block comes first.
+         * Blocks [packageName] for [reason] after [delayMillis]. One alarm per package; scheduling
+         * again replaces it.
          */
         fun scheduleBlockIn(
             packageName: String,
@@ -54,8 +53,7 @@ class TimeLimitScheduler
             alarmManager.cancel(pi)
         }
 
-        // Extras don't affect PendingIntent identity, so the FLAG_NO_CREATE lookup in cancelBlock
-        // (no reason) still finds an alarm scheduled with one.
+        // Extras don't affect PendingIntent identity, so cancelBlock finds alarms with any reason.
         private fun buildPendingIntent(
             packageName: String,
             label: String,

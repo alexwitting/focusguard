@@ -149,8 +149,7 @@ fun OnboardingScreen(
                 label = "onboarding-step",
                 modifier = Modifier.weight(1f),
             ) { step ->
-                // Derived from `state` for *this* step, so the outgoing page keeps its own
-                // granted flag while it animates away instead of reading the new step's.
+                // Per-step, so the page animating out keeps its own granted flag.
                 StepContent(
                     step = step,
                     isGranted = state.isGranted(step),
@@ -220,10 +219,8 @@ private fun StepContent(
                 GuideCard(steps = meta.guide, note = meta.guideNote)
             }
 
-            // Android 13+ greys out a sideloaded app's accessibility switch as a "restricted
-            // setting". Tapping it shows a dialog and leaves the service off, which reads to the
-            // user as "I enabled it and the app didn't notice". Only the user can lift the
-            // restriction, from App info's overflow menu, so explain that once they've tried.
+            // Android 13+ blocks a sideloaded app's accessibility switch as a "restricted
+            // setting" until the user allows it from App info. Explain this after a failed try.
             if (needsRestrictedSettingsHelp(step, hasAttempted, isGranted)) {
                 RestrictedSettingHelp(onOpenAppInfo = onOpenAppInfo)
             }
@@ -388,8 +385,7 @@ private fun StepActions(
                 Button(onClick = onGrant, modifier = primaryModifier) {
                     Text(if (hasAttempted) "Try again" else "Open settings")
                 }
-                // After a first attempt (or on optional steps) offer a way past, so the user is
-                // never stuck on a permission their phone won't grant.
+                // After a first try, or on optional steps, offer a way past.
                 if (hasAttempted || optional) {
                     TextButton(
                         onClick = if (optional) onSkip else onNext,
@@ -473,18 +469,18 @@ private val STEP_META: Map<OnboardingStep, StepMeta> =
         OnboardingStep.WELCOME to
             StepMeta(
                 icon = Icons.Default.Shield,
-                title = "Take back control",
+                title = "Welcome to FocusGuard",
                 description =
-                    "FocusGuard blocks distracting apps, websites and short-form feeds. " +
-                        "It needs a few permissions to do that — each step explains what one is for.",
+                    "FocusGuard blocks apps, websites and short-video feeds. The next steps " +
+                        "set up the permissions it needs.",
             ),
         OnboardingStep.ACCESSIBILITY to
             StepMeta(
                 icon = Icons.Default.Accessibility,
                 title = "Turn on the accessibility service",
                 description =
-                    "Lets FocusGuard see which app is open so it can block it the moment it appears.",
-                privacyNote = "Never reads what you type",
+                    "Lets FocusGuard see which app is open, so it can block it.",
+                privacyNote = "Reads only which app is open and the browser's address bar",
                 guide =
                     listOf(
                         "Open \"Installed apps\" (or \"Downloaded apps\")",
@@ -506,15 +502,15 @@ private val STEP_META: Map<OnboardingStep, StepMeta> =
                         "Turn on \"Permit usage access\"",
                         "Press back to return here",
                     ),
-                guideNote = "The list can be long — use the search icon if you can't see it.",
+                guideNote = "If FocusGuard isn't in the list, use the search icon.",
             ),
         OnboardingStep.BATTERY to
             StepMeta(
                 icon = Icons.Default.BatteryFull,
                 title = "Keep FocusGuard running",
                 description =
-                    "Stops Android putting FocusGuard to sleep. Without this, blocking can " +
-                        "quietly stop when the screen is off.",
+                    "Stops Android pausing FocusGuard. Without this, blocking can stop while " +
+                        "the screen is off.",
                 guide = listOf("Tap Allow in the dialog that appears"),
                 guideNote =
                     "No dialog? Go to Settings › Battery › Battery optimisation, find " +
@@ -525,11 +521,11 @@ private val STEP_META: Map<OnboardingStep, StepMeta> =
                 icon = Icons.Default.VpnKey,
                 title = "Block websites",
                 description =
-                    "Creates a local-only VPN that filters website lookups on this phone. " +
-                        "It never connects to an outside server.",
-                privacyNote = "No traffic leaves your device",
+                    "Sets up a VPN on this phone that blocks lookups for the sites on your " +
+                        "list. Other lookups are sent to Cloudflare's DNS (1.1.1.1).",
+                privacyNote = "Only website lookups go through it, not your traffic",
                 guide = listOf("Tap OK in the dialog that appears"),
-                guideNote = "Optional — skip it if you only want to block apps.",
+                guideNote = "Optional. The browser scan blocks websites without it.",
                 optional = true,
             ),
         OnboardingStep.EXACT_ALARM to
@@ -537,22 +533,22 @@ private val STEP_META: Map<OnboardingStep, StepMeta> =
                 icon = Icons.Default.Schedule,
                 title = "Allow exact alarms",
                 description =
-                    "Lets FocusGuard step in at the exact minute a daily limit runs out.",
+                    "Lets FocusGuard block an app as soon as its daily limit runs out.",
                 guide =
                     listOf(
                         "Find FocusGuard in the list",
                         "Turn on \"Allow setting alarms and reminders\"",
                     ),
-                guideNote = "Optional — skip it if you don't use daily time limits.",
+                guideNote = "Optional. Skip it if you don't use daily time limits.",
                 optional = true,
             ),
         OnboardingStep.DONE to
             StepMeta(
                 icon = Icons.Default.Lock,
-                title = "You're all set",
+                title = "Setup is done",
                 description =
-                    "Head to Block to choose what to limit, and set a PIN in Settings so " +
-                        "future-you can't undo it on a whim.",
+                    "Add apps and websites in Block. To stop rules being changed on impulse, " +
+                        "set a PIN in Settings.",
             ),
     )
 

@@ -70,11 +70,12 @@ Thanks for your interest in contributing.
 
 ## Testing
 
+- Test top-down: drive each module from its entry point (ViewModels, UseCases, repositories on real storage, services and workers under Robolectric) with the `:core:testing` fakes, then add lower-level tests only for branches those can't reach
 - JUnit 5 + MockK + Turbine for all JVM modules (`:core:domain`, `:core:system`, `:core:testing`, feature modules)
 - Robolectric for JVM tests that need real Android framework behavior (e.g. `FocusGuardAccessibilityServiceTest`)
 - JUnit 4 for instrumented tests (`core/system/src/androidTest`) — run via `:core:system:connectedDebugAndroidTest`
 - Engine classes (`AppBlockingEngine`, `DnsFilterEngine`) target 100% branch coverage
-- Kover's per-module coverage gates are a regression floor (fail if coverage drops), not a target to chase upward
+- Kover gates each module at 90% line coverage and the merged report at 90% branch coverage; CI fails below either
 
 ## Submitting a pull request
 

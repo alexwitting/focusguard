@@ -29,7 +29,6 @@ class OnboardingViewModel
         private val _state = MutableStateFlow(OnboardingState())
         val state: StateFlow<OnboardingState> = _state.asStateFlow()
 
-        // MutableSharedFlow + asSharedFlow(), matching Block/SettingsViewModel's effect convention.
         private val _effects = MutableSharedFlow<OnboardingEffect>()
         val effects: SharedFlow<OnboardingEffect> = _effects.asSharedFlow()
 
@@ -44,7 +43,7 @@ class OnboardingViewModel
             }
         }
 
-        /** Called by the screen on every ON_RESUME — bypasses the 30-second poll. */
+        /** Re-reads permissions now rather than waiting for the 30-second poll; called on resume. */
         fun forceRefresh() {
             viewModelScope.launch(Dispatchers.IO) {
                 runCatching { systemHealthRepository.checkPermissionsNow() }

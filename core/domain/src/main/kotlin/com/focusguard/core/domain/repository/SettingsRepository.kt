@@ -19,10 +19,6 @@ interface SettingsRepository {
         date: LocalDate,
     )
 
-    fun isSyncEnabled(): Flow<Boolean>
-
-    suspend fun setSyncEnabled(enabled: Boolean)
-
     fun getBedtime(): Flow<TimeWindow?>
 
     suspend fun setBedtime(window: TimeWindow?)

@@ -21,14 +21,21 @@ import com.focusguard.core.testing.FakeSettingsRepository
 import com.focusguard.core.testing.FakeSystemHealthRepository
 import com.focusguard.core.testing.MainDispatcherExtension
 import io.mockk.coEvery
+import io.mockk.every
 import io.mockk.mockk
+import io.mockk.mockkStatic
+import io.mockk.unmockkStatic
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.RegisterExtension
 import java.time.DayOfWeek
@@ -47,11 +54,25 @@ class SettingsViewModelTest {
     private val settingsRepository = FakeSettingsRepository()
     private val pinRepository = FakePinRepository()
 
+    @BeforeEach
+    fun stubLog() {
+        // android.util.Log throws in plain JVM tests.
+        mockkStatic(android.util.Log::class)
+        every { android.util.Log.e(any(), any(), any()) } returns 0
+    }
+
+    @AfterEach
+    fun unstubLog() {
+        unmockkStatic(android.util.Log::class)
+    }
+
     private fun createViewModel(
         setBedtimeOverride: SetBedtimeUseCase? = null,
         disablePinOverride: DisablePinUseCase? = null,
         setPinOverride: SetPinUseCase? = null,
         enableWebContentBlockingOverride: EnableWebContentBlockingUseCase? = null,
+        getGracePeriodOverride: GetGracePeriodEnabledUseCase? = null,
+        setGracePeriodOverride: SetGracePeriodEnabledUseCase? = null,
     ): SettingsViewModel =
         SettingsViewModel(
             getSystemHealth = GetSystemHealthUseCase(systemHealthRepository),
@@ -63,8 +84,8 @@ class SettingsViewModelTest {
             getPinEnabled = GetPinEnabledUseCase(pinRepository),
             getWebContentBlockingEnabled = GetWebContentBlockingEnabledUseCase(settingsRepository),
             enableWebContentBlocking = enableWebContentBlockingOverride ?: EnableWebContentBlockingUseCase(settingsRepository),
-            getGracePeriodEnabled = GetGracePeriodEnabledUseCase(settingsRepository),
-            setGracePeriodEnabled = SetGracePeriodEnabledUseCase(settingsRepository, pinRepository, FakeClockProvider()),
+            getGracePeriodEnabled = getGracePeriodOverride ?: GetGracePeriodEnabledUseCase(settingsRepository),
+            setGracePeriodEnabled = setGracePeriodOverride ?: SetGracePeriodEnabledUseCase(settingsRepository, pinRepository, FakeClockProvider()),
         )
 
     @Test
@@ -205,6 +226,39 @@ class SettingsViewModelTest {
                 TimeWindow(22, 0, 7, 0),
                 settingsRepository.getBedtime().first(),
             )
+        }
+
+    @Test
+    fun `SaveBedtime rejects matching start and end times and keeps the dialog open`() =
+        runTest {
+            val viewModel = createViewModel()
+            viewModel.onIntent(SettingsIntent.ShowBedtimeDialog)
+            viewModel.onIntent(SettingsIntent.BedtimeStartChanged(hour = 7, minute = 0))
+
+            viewModel.effects.test {
+                viewModel.onIntent(SettingsIntent.SaveBedtime)
+
+                assertEquals(SettingsEffect.ShowSnackbar("Bedtime needs different start and end times"), awaitItem())
+            }
+            assertTrue(viewModel.state.value.showBedtimeDialog)
+            assertNull(settingsRepository.getBedtime().first())
+        }
+
+    @Test
+    fun `a PIN check that throws shows an error and keeps the PIN prompt open`() =
+        runTest {
+            pinRepository.setPin("123456")
+            pinRepository.failVerify = true
+            val viewModel = createViewModel()
+            viewModel.onIntent(SettingsIntent.ShowBedtimeDialog)
+            viewModel.onIntent(SettingsIntent.SaveBedtime)
+
+            viewModel.onIntent(SettingsIntent.PinInputChanged("123456"))
+            viewModel.onIntent(SettingsIntent.SubmitPin)
+
+            assertEquals(PinStep.VerifyOld, viewModel.state.value.pinStep)
+            assertEquals("Couldn't check the PIN. Try again.", viewModel.state.value.pinError)
+            assertNull(settingsRepository.getBedtime().first())
         }
 
     @Test
@@ -413,7 +467,7 @@ class SettingsViewModelTest {
                 viewModel.onIntent(SettingsIntent.PinInputChanged("123456"))
                 viewModel.onIntent(SettingsIntent.SubmitPin)
 
-                assertEquals(SettingsEffect.ShowSnackbar("Failed to disable PIN"), awaitItem())
+                assertEquals(SettingsEffect.ShowSnackbar("Couldn't turn off the PIN"), awaitItem())
             }
             assertTrue(viewModel.state.value.isPinEnabled)
         }
@@ -431,7 +485,7 @@ class SettingsViewModelTest {
             viewModel.effects.test {
                 viewModel.onIntent(SettingsIntent.SaveBedtime)
 
-                assertEquals(SettingsEffect.ShowSnackbar("save failed"), awaitItem())
+                assertEquals(SettingsEffect.ShowSnackbar("Couldn't save bedtime"), awaitItem())
             }
         }
 
@@ -448,7 +502,7 @@ class SettingsViewModelTest {
             viewModel.effects.test {
                 viewModel.onIntent(SettingsIntent.ClearBedtime)
 
-                assertEquals(SettingsEffect.ShowSnackbar("clear failed"), awaitItem())
+                assertEquals(SettingsEffect.ShowSnackbar("Couldn't turn off bedtime"), awaitItem())
             }
         }
 
@@ -468,7 +522,7 @@ class SettingsViewModelTest {
                 viewModel.onIntent(SettingsIntent.PinInputChanged("123456"))
                 viewModel.onIntent(SettingsIntent.SubmitPin)
 
-                assertEquals(SettingsEffect.ShowSnackbar("save failed"), awaitItem())
+                assertEquals(SettingsEffect.ShowSnackbar("Couldn't save bedtime"), awaitItem())
             }
             assertTrue(viewModel.state.value.showBedtimeDialog)
         }
@@ -489,7 +543,7 @@ class SettingsViewModelTest {
                 viewModel.onIntent(SettingsIntent.PinInputChanged("123456"))
                 viewModel.onIntent(SettingsIntent.SubmitPin)
 
-                assertEquals(SettingsEffect.ShowSnackbar("clear failed"), awaitItem())
+                assertEquals(SettingsEffect.ShowSnackbar("Couldn't turn off bedtime"), awaitItem())
             }
         }
 
@@ -509,7 +563,7 @@ class SettingsViewModelTest {
                 viewModel.onIntent(SettingsIntent.PinInputChanged("123456"))
                 viewModel.onIntent(SettingsIntent.SubmitPin)
 
-                assertEquals(SettingsEffect.ShowSnackbar("set failed"), awaitItem())
+                assertEquals(SettingsEffect.ShowSnackbar("Couldn't save the PIN"), awaitItem())
             }
             assertEquals(PinStep.EnterNew, viewModel.state.value.pinStep)
         }
@@ -524,7 +578,7 @@ class SettingsViewModelTest {
             viewModel.effects.test {
                 viewModel.onIntent(SettingsIntent.SaveBedtime)
 
-                assertEquals(SettingsEffect.ShowSnackbar("Invalid bedtime window"), awaitItem())
+                assertEquals(SettingsEffect.ShowSnackbar("That bedtime isn't valid"), awaitItem())
             }
             assertEquals(PinStep.Hidden, viewModel.state.value.pinStep)
             assertTrue(viewModel.state.value.showBedtimeDialog)
@@ -541,17 +595,12 @@ class SettingsViewModelTest {
             viewModel.effects.test {
                 viewModel.onIntent(SettingsIntent.SaveBedtime)
 
-                assertEquals(SettingsEffect.ShowSnackbar("Invalid bedtime window"), awaitItem())
+                assertEquals(SettingsEffect.ShowSnackbar("That bedtime isn't valid"), awaitItem())
             }
             assertEquals(PinStep.Hidden, viewModel.state.value.pinStep)
         }
 
-    /**
-     * forceRefresh launches on Dispatchers.IO explicitly, which MainDispatcherExtension doesn't
-     * touch (it only swaps Dispatchers.Main) — same real-background-thread situation as
-     * FocusGuardAccessibilityServiceTest's awaitCondition, so this polls with a bounded
-     * real-time timeout instead of asserting immediately.
-     */
+    /** Polls for up to 2 seconds: forceRefresh runs on Dispatchers.IO, which tests don't replace. */
     private fun awaitCondition(condition: () -> Boolean) {
         val deadline = System.currentTimeMillis() + 2_000
         var result = condition()
@@ -607,7 +656,7 @@ class SettingsViewModelTest {
 
             viewModel.effects.test {
                 viewModel.onIntent(SettingsIntent.EnableWebContentBlocking)
-                assertEquals(SettingsEffect.ShowSnackbar("nope"), awaitItem())
+                assertEquals(SettingsEffect.ShowSnackbar("Couldn't turn on the browser scan"), awaitItem())
             }
             assertFalse(viewModel.state.value.isEnablingWebContentBlocking)
         }
@@ -642,5 +691,46 @@ class SettingsViewModelTest {
             advanceUntilIdle()
 
             assertFalse(settingsRepository.isGracePeriodEnabled().first())
+        }
+
+    @Test
+    fun `a failed extension change says so`() =
+        runTest {
+            val failing = mockk<SetGracePeriodEnabledUseCase> { coEvery { this@mockk(any(), any()) } throws IllegalStateException("disk") }
+            val viewModel = createViewModel(setGracePeriodOverride = failing)
+
+            viewModel.effects.test {
+                viewModel.onIntent(SettingsIntent.SetGracePeriodEnabled(true))
+                assertEquals(SettingsEffect.ShowSnackbar("Couldn't change the extension setting"), awaitItem())
+            }
+        }
+
+    @Test
+    fun `a failed load stops the spinner instead of hanging`() =
+        runTest {
+            val failing = mockk<GetGracePeriodEnabledUseCase> { every { this@mockk() } returns flow { throw IllegalStateException("db") } }
+
+            val viewModel = createViewModel(getGracePeriodOverride = failing)
+
+            assertFalse(viewModel.state.value.isLoading)
+        }
+
+    @Test
+    fun `a second submit while the PIN is still being checked counts once`() =
+        runTest {
+            pinRepository.setPin("123456")
+            val viewModel = createViewModel()
+            viewModel.onIntent(SettingsIntent.ShowBedtimeDialog)
+            viewModel.onIntent(SettingsIntent.SaveBedtime)
+            viewModel.onIntent(SettingsIntent.PinInputChanged("000000"))
+            val gate = CompletableDeferred<Unit>()
+            pinRepository.verifyGate = gate
+
+            viewModel.onIntent(SettingsIntent.SubmitPin)
+            viewModel.onIntent(SettingsIntent.SubmitPin)
+            gate.complete(Unit)
+            advanceUntilIdle()
+
+            assertEquals(1, pinRepository.getLockout().failedAttempts)
         }
 }

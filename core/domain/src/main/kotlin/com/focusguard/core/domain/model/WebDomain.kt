@@ -8,9 +8,8 @@ object WebDomain {
     private val TLD = Regex("^([a-z]{2,63}|xn--[a-z0-9-]{2,59})$")
 
     /**
-     * "https://www.Instagram.com/reels?x=1" → "instagram.com". Returns null when the input isn't
-     * a usable hostname (spaces, no dot, an IP-less single label, bad characters). Rules store
-     * hostnames only — a path or port in the stored value could never match a DNS query.
+     * "https://www.Instagram.com/reels?x=1" → "instagram.com". Null when the input isn't a usable
+     * hostname. Path, port and query are dropped because DNS rules match hostnames only.
      */
     fun normalize(input: String): String? {
         var host = input.trim().lowercase()

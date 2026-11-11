@@ -77,8 +77,7 @@ class WebContentFilterEngineTest {
 
     @Test
     fun `looksLikeUrl rejects a sentence mentioning a domain`() {
-        // This is exactly the shape of text that caused the old substring-scan false positives —
-        // a domain mentioned in passing within ordinary prose, not sitting alone in a URL field.
+        // A domain mentioned in ordinary text isn't a URL.
         assertFalse(WebContentFilterEngine.looksLikeUrl("Visit example.com for more"))
     }
 

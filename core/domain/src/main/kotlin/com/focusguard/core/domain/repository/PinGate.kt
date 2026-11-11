@@ -6,10 +6,8 @@ import kotlinx.coroutines.flow.first
 import java.time.Instant
 
 /**
- * The PIN Gate Pattern: UseCases that mutate rules/settings call this before applying the
- * change. Throws if a PIN is enabled and [token] isn't a currently-valid verification token;
- * does nothing if PIN is disabled. [action] completes the message "A valid PIN token is
- * required to $action".
+ * Called by every use case that changes rules or settings. Throws unless the PIN is off or
+ * [token] is still valid on [clock]. [action] completes "A valid PIN token is required to …".
  */
 suspend fun PinRepository.requireValidTokenIfEnabled(
     token: PinVerificationToken?,

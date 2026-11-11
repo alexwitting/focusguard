@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.focusguard.core.domain.model.PermissionsHealth
 import com.focusguard.core.domain.model.PinAttemptResult
+import com.focusguard.core.domain.model.PinVerificationToken
 import com.focusguard.core.domain.model.SystemHealth
 import com.focusguard.core.domain.model.TimeWindow
 import com.focusguard.core.domain.usecase.pin.DisablePinUseCase
@@ -69,8 +70,7 @@ class SettingsViewModel
                     ),
                     getGracePeriodEnabled(),
                 ) { data, gracePeriod -> data to gracePeriod }
-                    // An uncaught exception here would end this flow for good and freeze the
-                    // screen on stale data (see CLAUDE.md, Error handling).
+                    // Keeps the screen out of a dead, stale state if loading fails.
                     .catch { e ->
                         Log.e(TAG, "Failed to load settings", e)
                         _state.update { it.copy(isLoading = false) }
@@ -99,10 +99,8 @@ class SettingsViewModel
         )
 
         /**
-         * Bypasses the 30-second poll. Called on every ON_RESUME, and after toggling the VPN
-         * service — [afterDelayMs] gives the foreground service a moment to actually start/stop
-         * (establishing or tearing down the tun interface) before we re-read system state, since
-         * that happens asynchronously right after the toggle is clicked.
+         * Re-reads health now rather than waiting for the 30-second poll. [afterDelayMs] gives the
+         * VPN service time to start or stop after a toggle.
          */
         fun forceRefresh(afterDelayMs: Long = 0) {
             viewModelScope.launch(Dispatchers.IO) {
@@ -182,6 +180,9 @@ class SettingsViewModel
         /** Pending value for a PIN-gated grace-period change; read back once the PIN checks out. */
         private var pendingGracePeriod: Boolean? = null
 
+        // Ignores repeat submits while a PIN check runs, so one entry can't count twice.
+        private var verifyingPin = false
+
         private fun handleSetGracePeriod(enabled: Boolean) {
             if (_state.value.isPinEnabled) {
                 pendingGracePeriod = enabled
@@ -212,7 +213,7 @@ class SettingsViewModel
             } else {
                 viewModelScope.launch {
                     runCatching { setBedtime(null, null) }
-                        .onFailure { emit(SettingsEffect.ShowSnackbar(it.message ?: "Failed to clear bedtime")) }
+                        .onFailure { emit(SettingsEffect.ShowSnackbar("Couldn't turn off bedtime")) }
                 }
             }
         }
@@ -221,7 +222,7 @@ class SettingsViewModel
             _state.update { it.copy(isEnablingWebContentBlocking = true) }
             viewModelScope.launch {
                 runCatching { enableWebContentBlocking() }
-                    .onFailure { emit(SettingsEffect.ShowSnackbar(it.message ?: "Failed to enable website blocking")) }
+                    .onFailure { emit(SettingsEffect.ShowSnackbar("Couldn't turn on the browser scan")) }
                 _state.update { it.copy(isEnablingWebContentBlocking = false) }
             }
         }
@@ -237,48 +238,64 @@ class SettingsViewModel
             viewModelScope.launch {
                 when (s.pinStep) {
                     PinStep.VerifyOld -> {
-                        val result = verifyPin(pin)
+                        if (verifyingPin) return@launch
+                        verifyingPin = true
+                        val result =
+                            runCatching { verifyPin(pin) }
+                                .onFailure { e -> Log.e(TAG, "PIN check failed", e) }
+                                .getOrNull()
+                        verifyingPin = false
                         val token = (result as? PinAttemptResult.Success)?.token
-                        if (token == null) {
+                        if (result == null) {
+                            _state.update { it.copy(pinError = "Couldn't check the PIN. Try again.", pinInput = "") }
+                        } else if (token == null) {
                             _state.update { it.copy(pinError = result.errorMessage(), pinInput = "") }
                         } else {
-                            when (s.pendingPinAction) {
-                                PinAction.Disable -> {
-                                    runCatching { disablePin(token) }
-                                        .onSuccess { _state.update { it.copy(pinStep = PinStep.Hidden, pinInput = "", pendingToken = null) } }
-                                        .onFailure { emit(SettingsEffect.ShowSnackbar("Failed to disable PIN")) }
-                                }
-                                PinAction.Change ->
-                                    _state.update { it.copy(pinStep = PinStep.EnterNew, pinInput = "", pinError = null, pendingToken = token) }
-                                PinAction.None ->
-                                    _state.update { it.copy(pinStep = PinStep.Hidden) }
-                                PinAction.SaveBedtime -> {
-                                    val edit = s.bedtimeEdit
-                                    runCatching {
-                                        val window = TimeWindow(edit.startHour, edit.startMinute, edit.endHour, edit.endMinute, edit.days)
-                                        setBedtime(window, token)
-                                    }.onSuccess { _state.update { it.copy(pinStep = PinStep.Hidden, pinInput = "", pendingToken = null, showBedtimeDialog = false) } }
-                                        .onFailure { emit(SettingsEffect.ShowSnackbar(it.message ?: "Failed to save bedtime")) }
-                                }
-                                PinAction.SetGracePeriod -> {
-                                    val enabled = pendingGracePeriod ?: !s.gracePeriodEnabled
-                                    pendingGracePeriod = null
-                                    runCatching { setGracePeriodEnabled(enabled, token) }
-                                        .onSuccess { _state.update { it.copy(pinStep = PinStep.Hidden, pinInput = "", pendingToken = null) } }
-                                        .onFailure { emit(SettingsEffect.ShowSnackbar("Couldn't change the extension setting")) }
-                                }
-                                PinAction.ClearBedtime -> {
-                                    runCatching { setBedtime(null, token) }
-                                        .onSuccess { _state.update { it.copy(pinStep = PinStep.Hidden, pinInput = "", pendingToken = null) } }
-                                        .onFailure { emit(SettingsEffect.ShowSnackbar(it.message ?: "Failed to clear bedtime")) }
-                                }
-                            }
+                            runPendingAction(s, token)
                         }
                     }
 
                     PinStep.EnterNew, PinStep.ConfirmNew -> handleNewPinEntry(s.pinStep, pin)
 
                     PinStep.Hidden -> Unit
+                }
+            }
+        }
+
+        /** Carries out the change the PIN prompt was opened for, now that [token] is in hand. */
+        private suspend fun runPendingAction(
+            s: SettingsState,
+            token: PinVerificationToken,
+        ) {
+            when (s.pendingPinAction) {
+                PinAction.Disable -> {
+                    runCatching { disablePin(token) }
+                        .onSuccess { _state.update { it.copy(pinStep = PinStep.Hidden, pinInput = "", pendingToken = null) } }
+                        .onFailure { emit(SettingsEffect.ShowSnackbar("Couldn't turn off the PIN")) }
+                }
+                PinAction.Change ->
+                    _state.update { it.copy(pinStep = PinStep.EnterNew, pinInput = "", pinError = null, pendingToken = token) }
+                PinAction.None ->
+                    _state.update { it.copy(pinStep = PinStep.Hidden) }
+                PinAction.SaveBedtime -> {
+                    val edit = s.bedtimeEdit
+                    runCatching {
+                        val window = TimeWindow(edit.startHour, edit.startMinute, edit.endHour, edit.endMinute, edit.days)
+                        setBedtime(window, token)
+                    }.onSuccess { _state.update { it.copy(pinStep = PinStep.Hidden, pinInput = "", pendingToken = null, showBedtimeDialog = false) } }
+                        .onFailure { emit(SettingsEffect.ShowSnackbar("Couldn't save bedtime")) }
+                }
+                PinAction.SetGracePeriod -> {
+                    val enabled = pendingGracePeriod ?: !s.gracePeriodEnabled
+                    pendingGracePeriod = null
+                    runCatching { setGracePeriodEnabled(enabled, token) }
+                        .onSuccess { _state.update { it.copy(pinStep = PinStep.Hidden, pinInput = "", pendingToken = null) } }
+                        .onFailure { emit(SettingsEffect.ShowSnackbar("Couldn't change the extension setting")) }
+                }
+                PinAction.ClearBedtime -> {
+                    runCatching { setBedtime(null, token) }
+                        .onSuccess { _state.update { it.copy(pinStep = PinStep.Hidden, pinInput = "", pendingToken = null) } }
+                        .onFailure { emit(SettingsEffect.ShowSnackbar("Couldn't turn off bedtime")) }
                 }
             }
         }
@@ -303,21 +320,23 @@ class SettingsViewModel
                 .onSuccess { _state.update { it.copy(pinStep = PinStep.Hidden, pinInput = "", pendingToken = null) } }
                 .onFailure {
                     _state.update { it.copy(pinStep = PinStep.EnterNew, pinInput = "") }
-                    emit(SettingsEffect.ShowSnackbar(it.message ?: "Failed to set PIN"))
+                    emit(SettingsEffect.ShowSnackbar("Couldn't save the PIN"))
                 }
         }
 
         private fun handleSaveBedtime() {
             val edit = _state.value.bedtimeEdit
+            if (edit.startHour == edit.endHour && edit.startMinute == edit.endMinute) {
+                viewModelScope.launch { emit(SettingsEffect.ShowSnackbar("Bedtime needs different start and end times")) }
+                return
+            }
             runCatching {
                 TimeWindow(edit.startHour, edit.startMinute, edit.endHour, edit.endMinute, edit.days)
             }.onFailure {
-                viewModelScope.launch { emit(SettingsEffect.ShowSnackbar("Invalid bedtime window")) }
+                viewModelScope.launch { emit(SettingsEffect.ShowSnackbar("That bedtime isn't valid")) }
                 return
             }
-            // If PIN is enabled, we need a verified token before we can save.
-            // Show the PIN dialog on top of the bedtime dialog; the token is stored in
-            // pendingToken and the actual save happens in handleSubmitPin().
+            // With a PIN set, the save happens in handleSubmitPin once the PIN is verified.
             if (_state.value.isPinEnabled) {
                 _state.update {
                     it.copy(
@@ -333,7 +352,7 @@ class SettingsViewModel
                 val window = TimeWindow(edit.startHour, edit.startMinute, edit.endHour, edit.endMinute, edit.days)
                 runCatching { setBedtime(window, null) }
                     .onSuccess { _state.update { it.copy(showBedtimeDialog = false) } }
-                    .onFailure { emit(SettingsEffect.ShowSnackbar(it.message ?: "Failed to save bedtime")) }
+                    .onFailure { emit(SettingsEffect.ShowSnackbar("Couldn't save bedtime")) }
             }
         }
 

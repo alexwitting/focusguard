@@ -25,9 +25,8 @@ sealed interface PinAttemptResult {
 }
 
 /**
- * How long PIN entry locks after repeated wrong guesses. A 6-digit PIN has only a million
- * combinations, so without this a determined (or simply impatient) user could guess their way
- * past their own rules; the waits grow so a few typos cost little and brute force costs hours.
+ * Lockout after repeated wrong PINs. The waits grow, so a few typos cost little and guessing
+ * all one million 6-digit PINs takes hours.
  */
 object PinLockoutPolicy {
     /** Wrong PINs allowed before the first lockout. */

@@ -28,20 +28,12 @@ import org.robolectric.Shadows.shadowOf
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Constructed via Robolectric so `onCreate`/event dispatch run against a real (simulated)
- * Android framework. Hilt is bypassed entirely — the `@Inject lateinit var` fields are public
- * (no visibility modifier), so tests assign fakes/real-engines directly rather than standing up
- * a Hilt test component.
+ * Shared setup for the accessibility service tests. The service runs under Robolectric with its
+ * `@Inject` fields assigned directly (no Hilt test component).
  *
- * JUnit4 + Robolectric's own `@RunWith(RobolectricTestRunner::class)`, not the JUnit5 bridge used
- * elsewhere in this module: the community JUnit5 bridge showed cross-test isolation issues here
- * specifically (assertions checking `shadowOf(service).nextStartedActivity` passed individually
- * but failed when run as part of the full class — official Robolectric+JUnit4 doesn't have that
- * problem). See UsagePollerWorkerTest for the JUnit5-bridge version used where it works fine.
- *
- * The TimeLimit-strategy branch of handleWindowStateChanged does `serviceScope.launch(Dispatchers.IO)`
- * — a real background dispatcher untouched by Robolectric's main-looper idling — so those two
- * tests poll with a bounded real-time timeout instead of asserting immediately.
+ * Uses Robolectric's JUnit4 runner rather than the JUnit5 bridge, which doesn't isolate these
+ * tests from each other. TimeLimit decisions run on Dispatchers.IO, so those tests poll with
+ * [awaitCondition].
  */
 abstract class AccessibilityServiceTestBase {
     protected val blockRuleRepository = FakeBlockRuleRepository()
@@ -58,17 +50,16 @@ abstract class AccessibilityServiceTestBase {
 
     protected lateinit var service: FocusGuardAccessibilityService
 
+    /** The service's own package: the module namespace under Robolectric, not the app's. */
+    protected val ownPackage: String get() = service.packageName
+
     companion object {
-        const val PACKAGE_NAME = "com.focusguard"
         const val OTHER_APP = "com.other.app"
     }
 
     @Before
     fun setUp() {
-        // .get() only, not .create() — create() runs the real onCreate(), which is
-        // Hilt_FocusGuardAccessibilityService's generated injection path and requires a real
-        // @HiltAndroidApp test Application we haven't set up. Fields are assigned directly below
-        // instead, bypassing Hilt entirely (they're public — no visibility modifier).
+        // get(), not create(): create() runs Hilt's injection, which needs a Hilt test app.
         service =
             Robolectric.buildService(FocusGuardAccessibilityService::class.java).get().apply {
                 blockingEngine = AppBlockingEngine()
@@ -119,11 +110,8 @@ abstract class AccessibilityServiceTestBase {
         }
 
     /**
-     * Polls up to 2 real seconds for a Dispatchers.IO-launched side effect to land. Evaluates
-     * `condition()` exactly once per iteration and reuses that result for the final assertion —
-     * Robolectric's `nextStartedActivity` pops from a queue, so calling `condition()` an extra
-     * time (e.g. once in a `while` check, again in the assertion) silently consumes the value
-     * the first call already found and makes the second call see nothing.
+     * Polls for up to 2 seconds. Calls [condition] once per iteration, since some checks (like
+     * `nextStartedActivity`) consume what they read.
      */
     protected fun awaitCondition(condition: () -> Boolean) {
         val deadline = System.currentTimeMillis() + 2_000
@@ -136,16 +124,8 @@ abstract class AccessibilityServiceTestBase {
     }
 
     /**
-     * handleWindowStateChanged reads app-block rules from an in-memory `rulesCache`, populated
-     * only by onServiceConnected()'s Dispatchers.IO Flow collector — never called by `.get()`
-     * (see setUp()). onServiceConnected() is `protected` (inherited from AccessibilityService),
-     * hence reflection to invoke it, and reflection again to poll `rulesCache` directly rather
-     * than a fixed sleep: flowOn(Dispatchers.IO) shifts the upstream flow, but the collect{}
-     * lambda itself still runs on serviceScope's Dispatchers.Main — which under Robolectric's
-     * default PAUSED looper mode means "queued, not run" until the looper is explicitly idled,
-     * and a single fixed-length wait proved flaky under system load (intermittently still empty
-     * by the time the caller's assertion ran). Every current caller sets non-empty rules before
-     * calling this, so "cache became non-empty" is a reliable signal to poll on.
+     * Calls the protected onServiceConnected() and waits until the rules cache is filled. Callers
+     * must set at least one rule first.
      */
     protected fun connectService() {
         val method = FocusGuardAccessibilityService::class.java.getDeclaredMethod("onServiceConnected")
@@ -164,12 +144,7 @@ abstract class AccessibilityServiceTestBase {
         }
     }
 
-    /**
-     * Same reasoning as connectService(), but polls activeFiltersCache instead — a separate
-     * onServiceConnected() Flow collector populates it independently of rulesCache, and
-     * content-filter-only tests don't necessarily set any block rule for connectService()'s own
-     * poll condition (rulesCache non-empty) to ever be satisfied.
-     */
+    /** Like [connectService], but waits for the content-filter cache. */
     protected fun connectServiceWithFilters() {
         val method = FocusGuardAccessibilityService::class.java.getDeclaredMethod("onServiceConnected")
         method.isAccessible = true
@@ -188,17 +163,8 @@ abstract class AccessibilityServiceTestBase {
     }
 
     /**
-     * Same reasoning as connectService(), but polls both webContentBlockingEnabledCache
-     * (populated by settingsRepository.isWebContentBlockingEnabled()) and webBlockRulesCache
-     * (populated by webBlockRuleRepository.getWebBlockRules()) — two independent
-     * onServiceConnected() Flow collectors with no ordering guarantee relative to each other.
-     * Waiting on only one of them is a real race: callers set web-block rules and call
-     * enableWebContentBlocking() before invoking this, but if the enabled-flag collector happens
-     * to settle on Robolectric's Main dispatcher before the rules collector does, the caller's
-     * very next onAccessibilityEvent() call would run scanForBlockedWebsite() against an empty
-     * rules cache and silently detect nothing — an intermittent, hard-to-reproduce test failure
-     * that has nothing to do with the production code under test. Callers must enable web content
-     * blocking and set at least one web-block rule on the fakes before invoking this.
+     * Like [connectService], but waits for both the browser-scan flag and the website rules,
+     * which load independently. Callers must enable the scan and set a website rule first.
      */
     protected fun connectServiceWithWebBlocking() {
         val method = FocusGuardAccessibilityService::class.java.getDeclaredMethod("onServiceConnected")
@@ -236,7 +202,7 @@ abstract class AccessibilityServiceTestBase {
             isVisibleToUser = true
         }
 
-    /** A non-address-bar node — e.g. a tab-preview title or dialog copy — with plain body text. */
+    /** A plain-text node that isn't an address bar, like a tab title or dialog text. */
     protected fun textNode(
         text: String,
         editable: Boolean = false,
@@ -248,11 +214,8 @@ abstract class AccessibilityServiceTestBase {
         }
 
     /**
-     * scanForBlockedWebsite() can queue up to two started activities per call — the
-     * navigateBrowserAway() redirect (whose resolution in this Robolectric sandbox has proven
-     * inconsistent across runs, unlike on a real device with a real installed browser) and the
-     * block overlay. Draining the whole queue and matching by content, rather than assuming a
-     * fixed count/order, keeps assertions robust to that.
+     * Every activity started so far. A browser block can start the redirect as well as the block
+     * screen, so tests look for the block screen by content.
      */
     protected fun drainStartedActivities(): List<Intent> = generateSequence { shadowOf(service).nextStartedActivity }.toList()
 

@@ -10,17 +10,14 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 
-/**
- * Use cases consumed by more than one feature module live here rather than in any single
- * feature's own UseCaseModule, so no feature's DI wiring silently depends on another's.
- */
+/** Use cases needed by more than one feature module. */
 @Module
 @InstallIn(SingletonComponent::class)
 object UseCaseModule {
     @Provides
     fun provideGetSystemHealth(repo: SystemHealthRepository): GetSystemHealthUseCase = GetSystemHealthUseCase(repo)
 
-    // Shared by Settings (the browser-scan row) and Block (the "sites aren't blocked" prompt).
+    // Used by Settings (browser-scan row) and Block ("sites aren't blocked" prompt).
     @Provides
     fun provideGetWebContentBlockingEnabled(repo: SettingsRepository): GetWebContentBlockingEnabledUseCase = GetWebContentBlockingEnabledUseCase(repo)
 

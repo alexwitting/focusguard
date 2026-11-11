@@ -9,7 +9,6 @@ import java.time.LocalDate
 
 class FakeSettingsRepository : SettingsRepository {
     private val _gracePeriodEnabled = MutableStateFlow(false)
-    private val _syncEnabled = MutableStateFlow(false)
     private val _bedtime = MutableStateFlow<TimeWindow?>(null)
     private val _extensions = MutableStateFlow<Set<Pair<String, LocalDate>>>(emptySet())
     private val _onboardingComplete = MutableStateFlow(false)
@@ -31,12 +30,6 @@ class FakeSettingsRepository : SettingsRepository {
         date: LocalDate,
     ) {
         _extensions.value = _extensions.value + (packageName to date)
-    }
-
-    override fun isSyncEnabled(): Flow<Boolean> = _syncEnabled
-
-    override suspend fun setSyncEnabled(enabled: Boolean) {
-        _syncEnabled.value = enabled
     }
 
     override fun getBedtime(): Flow<TimeWindow?> = _bedtime

@@ -537,7 +537,7 @@ private fun BrowserScanPrompt(onEnable: () -> Unit) {
             Column(Modifier.weight(1f)) {
                 Text("These sites aren't blocked yet", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "Turn on the browser scan so FocusGuard can close them in your browser.",
+                    "Turn on the browser scan to block them.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -692,7 +692,7 @@ private fun ContentTab(
     ) {
         item {
             Text(
-                "Keep the app, lose the feed. FocusGuard closes these the moment they open.",
+                "Only the feed is blocked. The rest of each app still works.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

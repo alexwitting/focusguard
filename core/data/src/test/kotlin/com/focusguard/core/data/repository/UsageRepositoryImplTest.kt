@@ -1,168 +1,164 @@
 package com.focusguard.core.data.repository
 
-import android.content.pm.ApplicationInfo
-import android.content.pm.PackageManager
-import com.focusguard.core.data.local.dao.AppBlockRuleDao
-import com.focusguard.core.data.local.dao.DailyUsageSummaryRow
-import com.focusguard.core.data.local.dao.UsageDao
-import com.focusguard.core.data.local.dao.WeeklyTotalRow
-import com.focusguard.core.data.local.entity.BlockedAttemptEntity
-import com.focusguard.core.data.local.entity.toEntity
+import com.focusguard.core.data.DataTestEnvironment
 import com.focusguard.core.domain.model.AppBlockRule
 import com.focusguard.core.domain.model.AppUsageRecord
 import com.focusguard.core.domain.model.BlockingStrategy
 import com.focusguard.core.domain.model.UsageSession
 import com.focusguard.core.testing.FakeClockProvider
-import io.mockk.coEvery
-import io.mockk.coVerify
-import io.mockk.every
-import io.mockk.mockk
-import io.mockk.slot
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Test
-import java.time.Instant
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import java.time.LocalDate
 
+/**
+ * Usage written through the repository and read back through its reports, on a real Room
+ * database, so the SQL (minute rounding, sub-minute filtering, top-app limits) runs too.
+ */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
 class UsageRepositoryImplTest {
-    private val usageDao = mockk<UsageDao>()
-    private val blockRuleDao = mockk<AppBlockRuleDao>()
-    private val packageManager = mockk<PackageManager>()
-    private val clockProvider = FakeClockProvider()
-    private val repository = UsageRepositoryImpl(usageDao, blockRuleDao, packageManager, clockProvider)
+    private val env = DataTestEnvironment()
+    private val today = LocalDate.of(2026, 1, 15)
+    private val clock = FakeClockProvider().apply { setNow(today.atTime(12, 0)) }
+    private val rules = AppBlockRuleRepositoryImpl(env.db.appBlockRuleDao(), env.packageManager)
+    private val repository = UsageRepositoryImpl(env.db.usageDao(), env.db.appBlockRuleDao(), env.packageManager, clock)
+
+    @After
+    fun tearDown() = env.close()
+
+    /** Records [seconds] of use of [pkg] on [date], split into [parts] equal sessions. */
+    private suspend fun use(
+        pkg: String,
+        seconds: Long,
+        date: LocalDate = today,
+        parts: Int = 1,
+    ) {
+        val start = date.atTime(9, 0).atZone(java.time.ZoneId.systemDefault()).toInstant()
+        val each = seconds / parts
+        val sessions =
+            (0 until parts).map { i ->
+                val from = start.plusSeconds(i * each * 2)
+                UsageSession(startTime = from, endTime = from.plusSeconds(each))
+            }
+        repository.recordUsageSession(AppUsageRecord(packageName = pkg, date = date, sessions = sessions))
+    }
 
     @Test
-    fun `getDailyUsage merges usage rows with the app's time-limit rule and resolves labels`() =
+    fun `today's list shows apps used for a minute or more, with labels and time limits`() =
         runTest {
-            val date = LocalDate.of(2026, 1, 15)
-            val rule =
-                AppBlockRule(
-                    packageName = "com.app",
-                    label = "App",
-                    strategy = BlockingStrategy.TimeLimit(dailyLimitMinutes = 60),
-                )
-            every { usageDao.getDailyUsage(date.toEpochDay()) } returns
-                flowOf(listOf(DailyUsageSummaryRow(packageName = "com.app", totalMinutes = 42)))
-            every { blockRuleDao.getAll() } returns flowOf(listOf(rule.toEntity()))
-            val appInfo = ApplicationInfo().apply { packageName = "com.app" }
-            every { packageManager.getApplicationInfo("com.app", 0) } returns appInfo
-            every { packageManager.getApplicationLabel(appInfo) } returns "App"
+            env.installApp("com.instagram.android", "Instagram")
+            rules.upsertAppBlockRule(AppBlockRule(packageName = "com.instagram.android", label = "Instagram", strategy = BlockingStrategy.TimeLimit(30)))
+            use("com.instagram.android", seconds = 10 * 60)
+            use("com.android.settings", seconds = 20)
+            use("com.uninstalled.app", seconds = 60)
+            use("com.android.chrome", seconds = 75, parts = 3)
 
-            val result = repository.getDailyUsage(date).first()
+            val summaries = repository.getDailyUsage(today).first().associateBy { it.packageName }
 
-            assertEquals(1, result.size)
-            assertEquals("com.app", result.first().packageName)
-            assertEquals("App", result.first().label)
-            assertEquals(42, result.first().totalMinutes)
-            assertEquals(60, result.first().limitMinutes)
+            assertEquals(setOf("com.instagram.android", "com.uninstalled.app", "com.android.chrome"), summaries.keys)
+            assertEquals("Instagram", summaries.getValue("com.instagram.android").label)
+            assertEquals(10, summaries.getValue("com.instagram.android").totalMinutes)
+            assertEquals(30, summaries.getValue("com.instagram.android").limitMinutes)
+            assertEquals("com.uninstalled.app", summaries.getValue("com.uninstalled.app").label)
+            assertNull(summaries.getValue("com.uninstalled.app").limitMinutes)
+            assertEquals(1, summaries.getValue("com.android.chrome").totalMinutes)
         }
 
     @Test
-    fun `getDailyUsage falls back to the package name when the label cannot be resolved`() =
+    fun `an app with a non-time-limit rule shows no limit`() =
         runTest {
-            val date = LocalDate.of(2026, 1, 15)
-            every { usageDao.getDailyUsage(date.toEpochDay()) } returns
-                flowOf(listOf(DailyUsageSummaryRow(packageName = "com.unknown", totalMinutes = 5)))
-            every { blockRuleDao.getAll() } returns flowOf(emptyList())
-            every { packageManager.getApplicationInfo("com.unknown", 0) } throws
-                PackageManager.NameNotFoundException()
+            rules.upsertAppBlockRule(AppBlockRule(packageName = "com.app", label = "App", strategy = BlockingStrategy.AlwaysBlock))
+            use("com.app", seconds = 120)
 
-            val result = repository.getDailyUsage(date).first()
-
-            assertEquals("com.unknown", result.first().label)
-            assertEquals(null, result.first().limitMinutes)
+            assertNull(
+                repository
+                    .getDailyUsage(today)
+                    .first()
+                    .single()
+                    .limitMinutes,
+            )
         }
 
     @Test
-    fun `getWeeklyTotals maps rows to domain DailyTotal`() =
+    fun `the week's daily totals count every session, and top apps skip sub-minute ones`() =
         runTest {
-            val endDate = LocalDate.of(2026, 1, 15)
-            every { usageDao.getWeeklyTotals(endDate.minusDays(6).toEpochDay(), endDate.toEpochDay()) } returns
-                flowOf(listOf(WeeklyTotalRow(date = endDate.toEpochDay(), totalMinutes = 90)))
+            env.installApp("com.google.android.youtube", "YouTube")
+            use("com.android.settings", seconds = 30)
+            use("com.instagram.android", seconds = 30)
+            use("com.google.android.youtube", seconds = 90 * 60, date = today.minusDays(2))
+            use("com.instagram.android", seconds = 40 * 60, date = today.minusDays(1))
+            use("com.android.vending", seconds = 5, date = today.minusDays(3))
+            use("com.too.old", seconds = 600, date = today.minusDays(7))
 
-            val result = repository.getWeeklyTotals(endDate).first()
+            val totals = repository.getWeeklyTotals(today).first()
+            assertEquals(today, totals.last().date)
+            assertEquals(1, totals.last().totalMinutes)
+            assertEquals(listOf(today.minusDays(3), today.minusDays(2), today.minusDays(1), today), totals.map { it.date })
 
-            assertEquals(listOf(endDate), result.map { it.date })
-            assertEquals(listOf(90), result.map { it.totalMinutes })
+            val top = repository.getWeeklyAppBreakdown(today).first()
+            assertEquals(listOf("com.google.android.youtube", "com.instagram.android"), top.map { it.packageName })
+            assertEquals("YouTube", top.first().label)
+            assertEquals(90, top.first().totalMinutes)
         }
 
     @Test
-    fun `getWeeklyAppBreakdown maps rows to domain AppUsageSummary and resolves labels`() =
+    fun `the weekly breakdown lists at most five apps`() =
         runTest {
-            val endDate = LocalDate.of(2026, 1, 15)
-            every {
-                usageDao.getWeeklyAppTotals(endDate.minusDays(6).toEpochDay(), endDate.toEpochDay(), 5)
-            } returns flowOf(listOf(DailyUsageSummaryRow(packageName = "com.app", totalMinutes = 120)))
-            val appInfo = ApplicationInfo().apply { packageName = "com.app" }
-            every { packageManager.getApplicationInfo("com.app", 0) } returns appInfo
-            every { packageManager.getApplicationLabel(appInfo) } returns "App"
+            (1..7).forEach { use("com.app$it", seconds = it * 60L) }
 
-            val result = repository.getWeeklyAppBreakdown(endDate).first()
-
-            assertEquals(1, result.size)
-            assertEquals("com.app", result.first().packageName)
-            assertEquals("App", result.first().label)
-            assertEquals(120, result.first().totalMinutes)
-            assertEquals(null, result.first().limitMinutes)
+            assertEquals(5, repository.getWeeklyAppBreakdown(today).first().size)
         }
 
     @Test
-    fun `getBlockedAttempts delegates to the DAO`() =
+    fun `today's minutes for one app add up its sessions on the clock's date`() =
         runTest {
-            val date = LocalDate.of(2026, 1, 15)
-            every { usageDao.getBlockedAttempts(date.toEpochDay()) } returns flowOf(4)
+            use("com.app", seconds = 5 * 60)
+            use("com.app", seconds = 4 * 60)
+            use("com.app", seconds = 60 * 60, date = today.minusDays(1))
 
-            assertEquals(4, repository.getBlockedAttempts(date).first())
+            assertEquals(9, repository.getTodayUsageMinutes("com.app"))
+            assertEquals(0, repository.getTodayUsageMinutes("com.other"))
         }
 
     @Test
-    fun `getTodayUsageMinutes delegates to the DAO for today's epoch day`() =
+    fun `blocked attempts are counted per day`() =
         runTest {
-            val today = LocalDate.of(2026, 1, 15)
-            clockProvider.setNow(today.atStartOfDay())
-            coEvery { usageDao.getTodayUsageMinutes("com.app", today.toEpochDay()) } returns 33L
-
-            assertEquals(33, repository.getTodayUsageMinutes("com.app"))
-        }
-
-    @Test
-    fun `recordBlockedAttempt inserts an entity for today`() =
-        runTest {
-            val today = LocalDate.of(2026, 1, 15)
-            clockProvider.setNow(today.atStartOfDay())
-            val slot = slot<BlockedAttemptEntity>()
-            coEvery { usageDao.insertBlockedAttempt(capture(slot)) } returns Unit
-
+            repeat(2) { repository.recordBlockedAttempt("com.app") }
+            clock.setNow(today.plusDays(1).atTime(8, 0))
             repository.recordBlockedAttempt("com.app")
 
-            assertEquals("com.app", slot.captured.packageName)
-            assertEquals(today.toEpochDay(), slot.captured.date)
+            assertEquals(2, repository.getBlockedAttempts(today).first())
+            assertEquals(1, repository.getBlockedAttempts(today.plusDays(1)).first())
         }
 
     @Test
-    fun `recordUsageSession inserts one entity per session`() =
+    fun `pruning drops usage, blocks and extensions before the cutoff and keeps the rest`() =
         runTest {
-            val date = LocalDate.of(2026, 1, 15)
-            val record =
-                AppUsageRecord(
-                    packageName = "com.app",
-                    date = date,
-                    totalMinutes = 20,
-                    sessions =
-                        listOf(
-                            UsageSession(startTime = Instant.ofEpochMilli(1_000), endTime = Instant.ofEpochMilli(61_000)),
-                        ),
-                )
-            coEvery { usageDao.insertSession(any()) } returns Unit
+            val old = today.minusDays(40)
+            val settings = SettingsRepositoryImpl(env.dataStore, env.db.usageDao())
+            use("com.old", seconds = 600, date = old)
+            use("com.new", seconds = 600, date = today.minusDays(5))
+            clock.setNow(old.atTime(12, 0))
+            repository.recordBlockedAttempt("com.old")
+            settings.recordExtensionTaken("com.old", old)
+            clock.setNow(today.atTime(12, 0))
+            repository.recordBlockedAttempt("com.new")
+            settings.recordExtensionTaken("com.new", today)
 
-            repository.recordUsageSession(record)
+            repository.pruneBefore(today.minusDays(30))
 
-            coVerify(exactly = 1) {
-                usageDao.insertSession(
-                    match { it.packageName == "com.app" && it.date == date.toEpochDay() && it.startTime == 1_000L && it.endTime == 61_000L },
-                )
-            }
+            assertEquals(emptyList<Any>(), repository.getDailyUsage(old).first())
+            assertEquals(listOf("com.new"), repository.getWeeklyAppBreakdown(today.minusDays(2)).first().map { it.packageName })
+            assertEquals(0, repository.getBlockedAttempts(old).first())
+            assertEquals(1, repository.getBlockedAttempts(today).first())
+            assertEquals(false, settings.hasTakenExtensionToday("com.old", old).first())
+            assertEquals(true, settings.hasTakenExtensionToday("com.new", today).first())
         }
 }

@@ -59,9 +59,7 @@ class HomeViewModel
                             HomeUsageData(today, daily, weekly, appBreakdown, attempts)
                         }
                     }.catch { e ->
-                        // Without this, a single upstream failure (e.g. a Room query error) would
-                        // silently end this flow forever — the screen would be stuck on its loading
-                        // spinner with no further updates and no signal to the user of why.
+                        // Ends the spinner and shows the error instead of leaving the flow dead.
                         Log.e(TAG, "Failed to load home screen data", e)
                         _state.update { it.copy(isLoading = false, loadError = true) }
                     }.collect { data ->
@@ -87,11 +85,8 @@ class HomeViewModel
         }
 
         /**
-         * The current date, re-checked every minute. Capturing it once at construction pinned
-         * the dashboard to the day the ViewModel was created — the ViewModel survives in the
-         * back stack, so a Home screen left open past midnight kept showing yesterday. The first
-         * date is emitted immediately; later checks run on Dispatchers.Default for the same
-         * real-time-vs-test-dispatcher reason as BlockViewModel's dateTicker().
+         * The current date, re-checked every minute so a screen left open past midnight moves to
+         * the new day. Later checks run on Dispatchers.Default so delay() uses real time in tests.
          */
         private fun dateTicker(): Flow<LocalDate> =
             flow {
@@ -100,9 +95,7 @@ class HomeViewModel
                     emit(clockProvider.today())
                 }
             }.flowOn(Dispatchers.Default)
-                // onStart runs in the collector's context, so the first date arrives
-                // synchronously (merge() routed it through a channel, which made the initial
-                // load timing-dependent).
+                // Emits the first date synchronously, in the collector's context.
                 .onStart { emit(clockProvider.today()) }
                 .distinctUntilChanged()
 

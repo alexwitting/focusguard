@@ -27,34 +27,25 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.security.crypto)
 
-    implementation(libs.workmanager.ktx)
-    implementation(libs.hilt.work)
-    ksp(libs.hilt.work.compiler)
-
-    implementation(libs.retrofit)
-    implementation(libs.retrofit.converter.kotlinx.serialization)
-    implementation(libs.okhttp)
-    implementation(libs.okhttp.logging.interceptor)
-
     testImplementation(project(":core:testing"))
     testImplementation(libs.junit5.api)
     testRuntimeOnly(libs.junit5.engine)
     testImplementation(libs.mockk)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.turbine)
-    // UsageDaoTest runs Room's real SQL against an in-memory database. Robolectric's runner is
-    // JUnit4-native, so (as in :core:system) that file opts into JUnit4 + the vintage engine.
+    // UsageDaoTest runs Room's SQL against an in-memory database under Robolectric's JUnit4
+    // runner, through the vintage engine.
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.core)
     testImplementation(libs.junit)
     testRuntimeOnly(libs.junit5.vintage.engine)
 }
 
-// Regression gate, not a target — see :core:domain's build.gradle.kts for why.
+// Fails CI below 90% line coverage.
 kover {
     reports {
         verify {
-            rule { minBound(85) }
+            rule { minBound(90) }
         }
     }
 }

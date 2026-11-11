@@ -11,9 +11,6 @@ interface WebBlockRuleDao {
     @Query("SELECT * FROM web_block_rules ORDER BY domain ASC")
     fun getAll(): Flow<List<WebBlockRuleEntity>>
 
-    @Query("SELECT domain FROM web_block_rules WHERE enabled = 1")
-    fun getEnabledDomains(): Flow<List<String>>
-
     @Upsert
     suspend fun upsert(entity: WebBlockRuleEntity)
 

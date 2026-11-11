@@ -10,9 +10,7 @@ class DnsFilterEngine
             hostname: String,
             rules: List<WebBlockRule>,
         ): Boolean {
-            // DNS hostnames are case-insensitive (RFC 4343); rule.domain is already normalized
-            // to lowercase where rules are created (see BlockViewModel.addWeb()), but an
-            // incoming query hostname isn't guaranteed to be.
+            // Hostnames are case-insensitive; rule domains are stored lowercase.
             val normalized = hostname.trimEnd('.').lowercase()
             return rules.any { rule ->
                 rule.enabled && matches(normalized, rule)
@@ -23,8 +21,7 @@ class DnsFilterEngine
             hostname: String,
             rule: WebBlockRule,
         ): Boolean {
-            // "www." is the same site to a person: a rule for x.com with subdomains off still
-            // has to catch www.x.com, which is what browsers usually load.
+            // www.x.com is the same site as x.com, even with subdomains off.
             if (hostname == rule.domain || hostname == "www.${rule.domain}") return true
             if (rule.blockSubdomains && hostname.endsWith(".${rule.domain}")) return true
             return false

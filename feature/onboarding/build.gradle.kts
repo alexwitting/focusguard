@@ -4,6 +4,7 @@ plugins {
     id("focusguard.hilt")
     id("focusguard.detekt")
     id("focusguard.kover")
+    alias(libs.plugins.robolectric.junit5)
 }
 
 android {
@@ -28,13 +29,16 @@ dependencies {
     testImplementation(libs.mockk)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.turbine)
+    // Robolectric sets the SDK level for the Android 12+ steps.
+    testImplementation(libs.robolectric)
+    testImplementation(libs.robolectric.junit5.extension)
 }
 
-// Regression gate, not a target — see :core:domain's build.gradle.kts for why.
+// Fails CI below 90% line coverage.
 kover {
     reports {
         verify {
-            rule { minBound(75) }
+            rule { minBound(90) }
         }
     }
 }

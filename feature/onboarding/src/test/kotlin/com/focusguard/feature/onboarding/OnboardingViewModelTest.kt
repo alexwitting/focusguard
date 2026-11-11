@@ -33,8 +33,7 @@ class OnboardingViewModelTest {
 
     @BeforeEach
     fun setUp() {
-        // Log.e isn't mocked under a plain JVM unit test (no Robolectric here) — only needed by
-        // the forceRefresh-failure test below, but harmless to always stub.
+        // android.util.Log throws in plain JVM tests.
         mockkStatic(android.util.Log::class)
         every { android.util.Log.e(any(), any(), any()) } returns 0
     }
@@ -44,12 +43,7 @@ class OnboardingViewModelTest {
         unmockkStatic(android.util.Log::class)
     }
 
-    /**
-     * forceRefresh launches on Dispatchers.IO explicitly, which MainDispatcherExtension doesn't
-     * touch (it only swaps Dispatchers.Main) — same real-background-thread situation as
-     * SettingsViewModelTest's forceRefresh tests, so this polls with a bounded real-time timeout
-     * instead of asserting immediately.
-     */
+    /** Polls for up to 2 seconds: forceRefresh runs on Dispatchers.IO, which tests don't replace. */
     private fun awaitCondition(condition: () -> Boolean) {
         val deadline = System.currentTimeMillis() + 2_000
         var result = condition()
@@ -91,8 +85,7 @@ class OnboardingViewModelTest {
 
             viewModel.forceRefresh()
 
-            // No crash by the time forceRefresh's background coroutine would have completed —
-            // state simply stays at its last-known value, matching this ViewModel's default.
+            // State keeps its last value when the refresh fails.
             Thread.sleep(100)
             assertFalse(viewModel.state.value.health.accessibilityEnabled)
         }
@@ -114,9 +107,7 @@ class OnboardingViewModelTest {
     fun `completing the final step marks onboarding complete and emits NavigateToMain`() =
         runTest {
             val viewModel = createViewModel()
-            // The VPN -> EXACT_ALARM transition is gated on Build.VERSION.SDK_INT, which reads
-            // as 0 under a plain JVM unit test — loop to DONE instead of assuming a fixed step
-            // count so this test doesn't depend on that OS-stub quirk.
+            // Build.VERSION.SDK_INT is 0 in JVM tests, so step until DONE rather than counting.
             while (viewModel.state.value.step != OnboardingStep.DONE) {
                 viewModel.onNext()
             }
@@ -230,10 +221,7 @@ class OnboardingViewModelTest {
     @Test
     fun `onGrant sends the matching effect for every grantable step reachable under test`() =
         runTest {
-            // EXACT_ALARM is intentionally excluded: it's only reachable when
-            // Build.VERSION.SDK_INT >= S, which reads as 0 (unset) under a plain JVM unit
-            // test, so nextStep() always routes VPN straight to DONE here (see onNext's test
-            // above). Looping onNext() until EXACT_ALARM would never terminate.
+            // EXACT_ALARM needs Android 12+, and SDK_INT is 0 in JVM tests, so it's never reached.
             val viewModel = createViewModel()
             val expected =
                 mapOf(

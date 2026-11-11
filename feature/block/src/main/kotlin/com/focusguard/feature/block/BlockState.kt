@@ -22,10 +22,7 @@ data class BlockState(
     // Optimistic until the first health reading, so the "not blocked" prompt can't flash on load.
     val vpnActive: Boolean = true,
 ) {
-    /**
-     * Websites are on the list but nothing is set up to block them: the browser scan is off and
-     * the optional VPN isn't running. Rules would otherwise sit there silently doing nothing.
-     */
+    /** Websites are listed but neither the browser scan nor the VPN is on to block them. */
     val websitesUnprotected: Boolean
         get() = !isLoading && webRules.any { it.enabled } && !browserScanEnabled && !vpnActive
 
