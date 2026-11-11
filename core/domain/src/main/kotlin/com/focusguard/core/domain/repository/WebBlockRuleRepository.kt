@@ -7,8 +7,6 @@ import kotlinx.coroutines.flow.Flow
 interface WebBlockRuleRepository {
     fun getWebBlockRules(): Flow<List<WebBlockRule>>
 
-    fun getEnabledDomains(): Flow<Set<String>>
-
     fun getContentFilters(): Flow<Set<ContentFilter>>
 
     suspend fun upsertWebBlockRule(rule: WebBlockRule)

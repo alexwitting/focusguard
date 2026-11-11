@@ -15,12 +15,8 @@ import kotlinx.coroutines.flow.first
 import javax.inject.Inject
 
 /**
- * Posts an ongoing "blocking is disabled" alert while the accessibility service is off, and
- * clears it once it's back on. Run from UsagePollerWorker every ~15 minutes.
- *
- * This used to be a manifest-registered receiver for ACTION_SCREEN_ON, but Android only delivers
- * SCREEN_ON to receivers registered at runtime — the manifest one never fired, so the alert
- * never appeared. Skipped until onboarding is done, so a new user isn't nagged mid-setup.
+ * Shows an ongoing "blocking is off" notification while the accessibility service is off, and
+ * clears it once it's back. Runs from UsagePollerWorker; skipped until onboarding is done.
  */
 class AccessibilityWatchdog
     @Inject
@@ -45,7 +41,7 @@ class AccessibilityWatchdog
 
         private fun postAlert(nm: NotificationManager) {
             nm.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "Service Alerts", NotificationManager.IMPORTANCE_HIGH),
+                NotificationChannel(CHANNEL_ID, "Blocking alerts", NotificationManager.IMPORTANCE_HIGH),
             )
             val pi =
                 PendingIntent.getActivity(

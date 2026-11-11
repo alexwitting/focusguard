@@ -19,16 +19,14 @@ class TimeLimitAlarmReceiver : BroadcastReceiver() {
                 ?.let { runCatching { BlockReason.valueOf(it) }.getOrNull() }
                 ?: BlockReason.TIME_LIMIT_REACHED
 
-        // Delegate to the running accessibility service — it has the window token
-        // needed to bring BlockedActivity to the foreground reliably.
+        // The accessibility service can bring the block screen to the front reliably.
         val service = FocusGuardAccessibilityService.instance
         if (service != null) {
             service.launchBlockedScreen(pkg, label, reason)
             return
         }
 
-        // Fallback: attempt direct start (may be suppressed by Android's background
-        // activity launch restrictions if the accessibility service isn't running).
+        // Direct start; Android may suppress it as a background activity launch.
         runCatching {
             val blockIntent =
                 Intent().apply {

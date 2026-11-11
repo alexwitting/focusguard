@@ -24,11 +24,9 @@ class ComposeConventionPlugin : Plugin<Project> {
 
             val libs = extensions.getByType<VersionCatalogsExtension>().named("libs")
             dependencies {
-                // Material icons are needed by any Compose module; not a transitive export of :core:ui
+                // Material icons for every Compose module; :core:ui doesn't export them.
                 "implementation"(libs.findLibrary("androidx-compose-material-icons-core").get())
-                // @Preview support for every Compose module — ui-tooling-preview supplies the
-                // @Preview annotation itself; ui-tooling is the interactive renderer Android
-                // Studio uses, debug-only so it never ships in a release build.
+                // @Preview annotation, plus the Android Studio preview renderer (debug only).
                 "implementation"(libs.findLibrary("androidx-compose-ui-tooling-preview").get())
                 "debugImplementation"(libs.findLibrary("androidx-compose-ui-tooling").get())
             }

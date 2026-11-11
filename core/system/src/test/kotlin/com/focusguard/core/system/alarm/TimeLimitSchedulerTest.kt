@@ -16,11 +16,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
-/**
- * `Build.VERSION.SDK_INT` reads as 0 under a plain JVM unit test, so `scheduleBlock`'s
- * `SDK_INT >= S` branch never takes the "inexact" path here — only `setExactAndAllowWhileIdle`
- * is reachable, matching the pattern already established for OnboardingViewModelTest.
- */
+/** `Build.VERSION.SDK_INT` is 0 in plain JVM tests, so only the exact-alarm path runs here. */
 class TimeLimitSchedulerTest {
     private val context = mockk<Context>()
     private val alarmManager = mockk<AlarmManager>()

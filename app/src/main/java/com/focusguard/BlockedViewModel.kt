@@ -40,8 +40,7 @@ class BlockedViewModel
 
         /**
          * Records the blocked attempt and works out whether an extension can be offered. Runs
-         * once per block: the screen calls it from a LaunchedEffect, which re-runs on rotation
-         * and used to record the same block again each time.
+         * once per block, so recomposition and rotation don't count it again.
          */
         fun initialize(
             packageName: String,

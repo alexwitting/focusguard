@@ -18,14 +18,6 @@ class FakeWebBlockRuleRepository : WebBlockRuleRepository {
 
     override fun getWebBlockRules(): Flow<List<WebBlockRule>> = _rules.map { it.values.toList() }
 
-    override fun getEnabledDomains(): Flow<Set<String>> =
-        _rules.map { rules ->
-            rules.values
-                .filter { it.enabled }
-                .map { it.domain }
-                .toSet()
-        }
-
     override fun getContentFilters(): Flow<Set<ContentFilter>> = _contentFilters
 
     override suspend fun upsertWebBlockRule(rule: WebBlockRule) {

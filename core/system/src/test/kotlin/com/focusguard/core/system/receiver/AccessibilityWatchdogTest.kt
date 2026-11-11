@@ -22,12 +22,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
-/**
- * Every real Android SDK method throws under a plain JVM unit test (no
- * `unitTests.isReturnDefaultValues`, matching PinRepositoryImplTest's precedent) — so both the
- * received [Intent] and the one `postAlert` builds internally must be mocked, never constructed
- * for real.
- */
+/** Android SDK classes throw in plain JVM tests, so intents and notifications are mocked. */
 class AccessibilityWatchdogTest {
     private val context = mockk<Context>()
     private val accessibilityManager = mockk<AccessibilityManager>()
@@ -49,14 +44,11 @@ class AccessibilityWatchdogTest {
         mockkStatic(PendingIntent::class)
         every { PendingIntent.getActivity(any(), any(), any(), any()) } returns mockk()
 
-        // Covers the Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply { flags = ... }
-        // postAlert() builds internally.
+        // The intent postAlert() builds.
         mockkConstructor(Intent::class)
         every { anyConstructed<Intent>().setFlags(any()) } returns mockk()
 
-        // NotificationCompat.Builder.build() delegates to a real android.app.Notification.Builder
-        // internally (setWhen, etc.) — un-mockable framework calls unrelated to what postAlert()
-        // actually decides, so the whole fluent chain is mocked instead.
+        // build() runs real framework code, so the whole builder chain is mocked.
         mockkConstructor(NotificationCompat.Builder::class)
         every { anyConstructed<NotificationCompat.Builder>().setSmallIcon(any<Int>()) } answers { self as NotificationCompat.Builder }
         every { anyConstructed<NotificationCompat.Builder>().setContentTitle(any()) } answers { self as NotificationCompat.Builder }

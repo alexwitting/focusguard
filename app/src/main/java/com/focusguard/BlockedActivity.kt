@@ -112,9 +112,8 @@ class BlockedActivity : ComponentActivity() {
     }
 
     /**
-     * The activity is launched SINGLE_TOP, so a second block arriving while this one is showing
-     * (a different app, or a time limit firing) is delivered here instead of to onCreate.
-     * Without this the screen kept showing the first app's name and reason.
+     * A block that arrives while this screen is showing (it's SINGLE_TOP) comes here instead of
+     * onCreate, and replaces what's shown.
      */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -122,7 +121,7 @@ class BlockedActivity : ComponentActivity() {
         blockTarget = BlockTarget.from(intent)
     }
 
-    private var blockTarget by mutableStateOf(BlockTarget("", "This app", BlockReason.ALWAYS_BLOCKED))
+    private var blockTarget by mutableStateOf(BlockTarget("", null, BlockReason.ALWAYS_BLOCKED))
 
     private fun goHome() {
         startActivity(
@@ -138,15 +137,14 @@ class BlockedActivity : ComponentActivity() {
 /** What this block screen is about, read from the launching intent. */
 private data class BlockTarget(
     val packageName: String,
-    val label: String,
+    /** The app or site name; null when the launching intent didn't say. */
+    val label: String?,
     val reason: BlockReason,
 ) {
     companion object {
         fun from(intent: Intent): BlockTarget {
             val pkg = intent.getStringExtra(FocusGuardAccessibilityService.EXTRA_BLOCKED_PACKAGE).orEmpty()
-            val label =
-                intent.getStringExtra(FocusGuardAccessibilityService.EXTRA_BLOCKED_LABEL)
-                    ?: pkg.ifEmpty { "This app" }
+            val label = intent.getStringExtra(FocusGuardAccessibilityService.EXTRA_BLOCKED_LABEL)
             val reason =
                 intent
                     .getStringExtra(FocusGuardAccessibilityService.EXTRA_BLOCK_REASON)
@@ -157,65 +155,26 @@ private data class BlockTarget(
     }
 }
 
-private data class BlockedCopy(
-    val headline: String,
-    val body: String,
-    val icon: ImageVector,
-)
-
-private fun blockedCopy(
-    reason: BlockReason,
-    label: String,
-): BlockedCopy =
-    when (reason) {
-        BlockReason.TIME_LIMIT_REACHED ->
-            BlockedCopy(
-                headline = "That's your time on $label for today",
-                body = "You set this limit to protect your time. It resets at midnight.",
-                icon = Icons.Outlined.HourglassBottom,
-            )
-        BlockReason.ALWAYS_BLOCKED ->
-            BlockedCopy(
-                headline = "$label is blocked",
-                body = "You chose to keep this app closed. You can change that in your block list.",
-                icon = Icons.Outlined.Block,
-            )
-        BlockReason.OUTSIDE_ALLOWED_WINDOW ->
-            BlockedCopy(
-                headline = "$label is closed right now",
-                body = "It's outside the hours you allowed for this app.",
-                icon = Icons.Outlined.Schedule,
-            )
-        BlockReason.CONTENT_FILTER ->
-            BlockedCopy(
-                headline = "This feed is filtered out",
-                body = "The rest of $label still works.",
-                icon = Icons.Outlined.SmartDisplay,
-            )
-        BlockReason.WEBSITE_BLOCKED ->
-            BlockedCopy(
-                headline = "This website is blocked",
-                body = "It's on your block list.",
-                icon = Icons.Outlined.Language,
-            )
-        BlockReason.BEDTIME ->
-            BlockedCopy(
-                headline = "It's bedtime",
-                body = "$label is off until your bedtime ends. Get some rest.",
-                icon = Icons.Outlined.Bedtime,
-            )
+private fun BlockReason.icon(): ImageVector =
+    when (this) {
+        BlockReason.TIME_LIMIT_REACHED -> Icons.Outlined.HourglassBottom
+        BlockReason.ALWAYS_BLOCKED -> Icons.Outlined.Block
+        BlockReason.OUTSIDE_ALLOWED_WINDOW -> Icons.Outlined.Schedule
+        BlockReason.CONTENT_FILTER -> Icons.Outlined.SmartDisplay
+        BlockReason.WEBSITE_BLOCKED -> Icons.Outlined.Language
+        BlockReason.BEDTIME -> Icons.Outlined.Bedtime
     }
 
 @Composable
 private fun BlockedContent(
     packageName: String,
-    label: String,
+    label: String?,
     reason: BlockReason,
     canRequestExtension: Boolean,
     onGoHome: () -> Unit,
     onRequestExtension: () -> Unit,
 ) {
-    val copy = blockedCopy(reason, label)
+    val copy = blockedText(reason, label)
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(
             modifier =
@@ -229,7 +188,7 @@ private fun BlockedContent(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(28.dp, Alignment.CenterVertically),
             ) {
-                BlockedBadge(packageName = packageName, label = label, icon = copy.icon)
+                BlockedBadge(packageName = packageName, label = label ?: packageName, icon = reason.icon())
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(12.dp),

@@ -81,10 +81,8 @@ class MainActivity : ComponentActivity() {
                         }
                     } ?: false
 
-                // Android 13+ drops every notification (time-limit warnings, the "blocking is
-                // off" alert) until POST_NOTIFICATIONS is granted at runtime — declaring it in the
-                // manifest isn't enough. Ask once the user reaches the main tabs, i.e. after
-                // onboarding, rather than stacking it onto the permission steps there.
+                // Android 13+ shows no notifications until POST_NOTIFICATIONS is granted at
+                // runtime. Asked once the user reaches the main tabs, after onboarding.
                 val notificationPermission =
                     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
                 LaunchedEffect(showBottomBar) {

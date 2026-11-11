@@ -1,9 +1,14 @@
 package com.focusguard.core.system.service
 
+import android.os.Looper
 import android.view.accessibility.AccessibilityNodeInfo
 import com.focusguard.core.domain.model.BlockReason
 import com.focusguard.core.domain.model.WebBlockRule
 import com.focusguard.core.system.engine.WebContentFilterEngine
+import com.focusguard.core.system.foreground.UsageStatsForegroundDetector
+import io.mockk.every
+import io.mockk.mockk
+import io.mockk.verify
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -14,6 +19,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
+import java.time.Duration
 import java.time.LocalDateTime
 
 /** Website blocking via the browser scan — see [AccessibilityServiceTestBase] for setup. */
@@ -40,8 +46,7 @@ class FocusGuardAccessibilityServiceWebTest : AccessibilityServiceTestBase() {
 
             service.onAccessibilityEvent(windowStateChangedEvent(WebContentFilterEngine.CHROME))
 
-            // Robolectric hands back copies of child nodes, so the close-tab click itself can't be
-            // observed here; the block proves the nested address bar was found.
+            // Robolectric returns copies of child nodes, so the click itself can't be observed.
             assertNotNull(blockedOverlay())
         }
 
@@ -119,11 +124,7 @@ class FocusGuardAccessibilityServiceWebTest : AccessibilityServiceTestBase() {
 
             service.onAccessibilityEvent(windowStateChangedEvent(WebContentFilterEngine.CHROME))
 
-            // scanForBlockedWebsite() also fires a navigateBrowserAway() redirect before the
-            // overlay; whether that resolves to a started activity in this Robolectric sandbox
-            // has proven inconsistent across runs (unlike on a real device with a real installed
-            // browser), so drain the whole queue and find the overlay by content instead of
-            // assuming a fixed position.
+            // The redirect may also start an activity, so find the block screen by content.
             val blocked = drainStartedActivities().firstOrNull { it.hasExtra(FocusGuardAccessibilityService.EXTRA_BLOCKED_LABEL) }
             assertNotNull(blocked)
             assertEquals("example.com", blocked!!.getStringExtra(FocusGuardAccessibilityService.EXTRA_BLOCKED_LABEL))
@@ -136,9 +137,7 @@ class FocusGuardAccessibilityServiceWebTest : AccessibilityServiceTestBase() {
     @Test
     fun `does not re-show the overlay for a repeat detection within the cooldown window`() =
         runTest {
-            // Simulates a browser that keeps reopening onto the same blocked tab (stale/
-            // restored session) with no user interaction in between — the overlay must only
-            // interrupt the user once, or they'd never get a chance to reach the address bar.
+            // The browser keeps reopening on the same blocked tab: block screen only once.
             webBlockRuleRepository.setRules(WebBlockRule(domain = "example.com"))
             settingsRepository.enableWebContentBlocking()
             connectServiceWithWebBlocking()
@@ -151,8 +150,7 @@ class FocusGuardAccessibilityServiceWebTest : AccessibilityServiceTestBase() {
             Thread.sleep(350) // clear the 300ms scan throttle; stays well under the 15s cooldown
             service.onAccessibilityEvent(windowStateChangedEvent(WebContentFilterEngine.CHROME))
 
-            // The repeat detection may still retry the redirect, but must not force the overlay
-            // (and the exit it causes) a second time.
+            // The redirect may repeat, but the block screen must not.
             assertFalse(drainStartedActivities().any { it.hasExtra(FocusGuardAccessibilityService.EXTRA_BLOCKED_LABEL) })
         }
 
@@ -189,8 +187,7 @@ class FocusGuardAccessibilityServiceWebTest : AccessibilityServiceTestBase() {
     @Test
     fun `does not block when the tab switcher shows a blocked domain as a tab preview`() =
         runTest {
-            // Chrome's "view all tabs" grid has no url_bar node at all — a blocked domain
-            // appearing as a tab preview's title text must not be mistaken for the active page.
+            // The tab grid has no address bar; a tab title showing a blocked domain doesn't count.
             webBlockRuleRepository.setRules(WebBlockRule(domain = "example.com"))
             settingsRepository.enableWebContentBlocking()
             connectServiceWithWebBlocking()
@@ -207,9 +204,7 @@ class FocusGuardAccessibilityServiceWebTest : AccessibilityServiceTestBase() {
     @Test
     fun `does not block when a captcha or permission dialog covers the page`() =
         runTest {
-            // A challenge/permission dialog can replace the normal browser chrome (no url_bar
-            // node present) while incidentally containing text that mentions a blocked domain
-            // (e.g. "Protected by example.com security") — that must not trigger a block either.
+            // A dialog replacing the browser UI can mention a blocked domain without being on it.
             webBlockRuleRepository.setRules(WebBlockRule(domain = "example.com"))
             settingsRepository.enableWebContentBlocking()
             connectServiceWithWebBlocking()
@@ -241,9 +236,7 @@ class FocusGuardAccessibilityServiceWebTest : AccessibilityServiceTestBase() {
     @Test
     fun `does not block an unmapped browser when the domain only appears in ordinary body text`() =
         runTest {
-            // No mapped resource id for this package, and the only matching text lives in a
-            // plain (non-editable, non-URL-shaped-field) node — not enough to trust as "the
-            // address bar," so this must not fall back to a blind substring match.
+            // Unknown browser: plain body text mentioning the domain isn't an address bar.
             val unmappedBrowser = "com.brave.browser"
             webBlockRuleRepository.setRules(WebBlockRule(domain = "example.com"))
             settingsRepository.enableWebContentBlocking()
@@ -255,5 +248,46 @@ class FocusGuardAccessibilityServiceWebTest : AccessibilityServiceTestBase() {
             service.onAccessibilityEvent(windowStateChangedEvent(unmappedBrowser))
 
             assertFalse(drainStartedActivities().any { it.hasExtra(FocusGuardAccessibilityService.EXTRA_BLOCKED_LABEL) })
+        }
+
+    @Test
+    fun `the backup poll catches a blocked site the browser never reported an event for`() =
+        runTest {
+            service.usageStatsForegroundDetector =
+                mockk { every { currentForegroundBrowser() } returns WebContentFilterEngine.CHROME }
+            connectWithBlockedExampleDotCom()
+            shadowOf(service).setRootInActiveWindow(urlBarNode(chromeUrlBarId(), "https://example.com/feed"))
+
+            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(2))
+
+            assertEquals("example.com", blockedOverlay()?.getStringExtra(FocusGuardAccessibilityService.EXTRA_BLOCKED_LABEL))
+        }
+
+    @Test
+    fun `the backup poll stays idle while the browser scan is off`() =
+        runTest {
+            val detector = mockk<UsageStatsForegroundDetector>(relaxed = true)
+            service.usageStatsForegroundDetector = detector
+            webBlockRuleRepository.setRules(WebBlockRule(domain = "example.com"))
+            connectService()
+
+            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(4))
+
+            verify(exactly = 0) { detector.currentForegroundBrowser() }
+            assertNull(blockedOverlay())
+        }
+
+    @Test
+    fun `after shutdown the backup poll no longer runs`() =
+        runTest {
+            val detector = mockk<UsageStatsForegroundDetector>(relaxed = true)
+            service.usageStatsForegroundDetector = detector
+            connectWithBlockedExampleDotCom()
+
+            service.onDestroy()
+            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(4))
+
+            verify(exactly = 0) { detector.currentForegroundBrowser() }
+            assertNull(FocusGuardAccessibilityService.instance)
         }
 }

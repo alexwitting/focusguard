@@ -8,12 +8,8 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 
 /**
- * Backup foreground-app signal for website blocking, built on the same UsageStatsManager API
- * Android's own Digital Wellbeing uses. The accessibility service's AccessibilityEvent stream is
- * the primary, immediate trigger for a content scan; this exists only to catch the rare case
- * where a browser delays or throttles those events, so a blocked page doesn't sit on screen
- * unnoticed. Requires PACKAGE_USAGE_STATS, which the app already requests for time-limit
- * tracking (surfaced as the "Usage access" row in Settings) — no new permission needed.
+ * Backup foreground signal for the browser scan, in case a browser delays or throttles
+ * accessibility events. Uses the usage-access permission the app already has.
  */
 class UsageStatsForegroundDetector
     @Inject
@@ -30,12 +26,8 @@ class UsageStatsForegroundDetector
             val event = UsageEvents.Event()
             while (events.hasNextEvent()) {
                 events.getNextEvent(event)
-                // The OS emits MOVE_TO_FOREGROUND/BACKGROUND on API < 29 and ACTIVITY_RESUMED/
-                // PAUSED on API 29+ (the latter pair replaced the former for better multi-window
-                // handling) — never both. minSdk here is 26, so both must be handled or this
-                // silently stops detecting anything on Android 8/9. The MOVE_TO_* constants are
-                // deprecated only as a recommendation to prefer ACTIVITY_* on newer APIs, not
-                // because they stop working — suppressed below rather than dropped.
+                // API 29+ reports ACTIVITY_RESUMED/PAUSED, older versions MOVE_TO_FOREGROUND/
+                // BACKGROUND; minSdk 26 needs both.
                 @Suppress("DEPRECATION")
                 when (event.eventType) {
                     UsageEvents.Event.MOVE_TO_FOREGROUND, UsageEvents.Event.ACTIVITY_RESUMED -> foreground = event.packageName

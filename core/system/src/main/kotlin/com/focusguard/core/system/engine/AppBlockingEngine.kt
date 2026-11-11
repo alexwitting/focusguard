@@ -13,10 +13,7 @@ import javax.inject.Inject
 class AppBlockingEngine
     @Inject
     constructor() {
-        /**
-         * [bedtime], when set and [now] is inside it, blocks any enabled rule regardless of its
-         * own strategy — bedtime is "everything I've chosen to restrict is off-limits overnight".
-         */
+        /** Inside [bedtime], every enabled rule blocks regardless of its strategy. */
         fun decide(
             rule: AppBlockRule,
             now: LocalDateTime,
@@ -56,13 +53,8 @@ class AppBlockingEngine
         )
 
         /**
-         * Looks ahead minute by minute (up to [horizonMinutes]) for the first moment [rule] and
-         * [bedtime] block the app, so a block can fire *while* the app is open — e.g. bedtime
-         * starting at 22:00 mid-scroll, or an allowed-hours window closing. Without this, both
-         * only took effect the next time the user switched into the app.
-         *
-         * Usage is ignored (time limits have their own countdown), so this only ever reports
-         * schedule- or bedtime-driven blocks. Returns null if nothing blocks within the horizon.
+         * The first moment within [horizonMinutes] that [rule] or [bedtime] blocks the app, so a
+         * block can fire while it's open. Usage is ignored; time limits have their own alarm.
          */
         fun nextBlock(
             rule: AppBlockRule,

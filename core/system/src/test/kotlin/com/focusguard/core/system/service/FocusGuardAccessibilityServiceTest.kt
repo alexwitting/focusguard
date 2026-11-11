@@ -10,7 +10,10 @@ import com.focusguard.core.domain.model.TimeWindow
 import com.focusguard.core.domain.model.WebBlockRule
 import com.focusguard.core.system.engine.ContentFilterEngine
 import com.focusguard.core.system.engine.WebContentFilterEngine
+import io.mockk.coEvery
+import io.mockk.mockk
 import io.mockk.verify
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -25,6 +28,7 @@ import org.robolectric.shadows.ShadowToast
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** App blocking, content filters, time limits, bedtime — see [AccessibilityServiceTestBase] for setup. */
 @RunWith(RobolectricTestRunner::class)
@@ -40,7 +44,13 @@ class FocusGuardAccessibilityServiceTest : AccessibilityServiceTestBase() {
 
     @Test
     fun `ignores accessibility events from its own package`() {
-        service.onAccessibilityEvent(windowStateChangedEvent(PACKAGE_NAME))
+        blockRuleRepository.setRules(
+            AppBlockRule(packageName = ownPackage, label = "FocusGuard", strategy = BlockingStrategy.AlwaysBlock),
+        )
+        connectService()
+
+        service.onAccessibilityEvent(windowStateChangedEvent(ownPackage))
+        service.onAccessibilityEvent(contentChangedEvent(ownPackage))
 
         assertNull(shadowOf(service).nextStartedActivity)
     }
@@ -61,7 +71,8 @@ class FocusGuardAccessibilityServiceTest : AccessibilityServiceTestBase() {
 
     @Test
     fun `allows a ScheduledBlock app inside its allowed window`() {
-        val now = java.time.LocalDateTime.now()
+        val now = LocalDateTime.of(2026, 3, 10, 12, 0)
+        clockProvider.setNow(now)
         val window = TimeWindow(0, 0, 23, 59, setOf(now.dayOfWeek))
         blockRuleRepository.setRules(
             AppBlockRule(packageName = OTHER_APP, label = "Other", strategy = BlockingStrategy.ScheduledBlock(listOf(window))),
@@ -130,7 +141,7 @@ class FocusGuardAccessibilityServiceTest : AccessibilityServiceTestBase() {
 
         // The block screen (FocusGuard's own activity) comes up, then the user picks the blocked
         // app from Recents.
-        service.onAccessibilityEvent(windowStateChangedEvent(PACKAGE_NAME, "com.focusguard.BlockedActivity"))
+        service.onAccessibilityEvent(windowStateChangedEvent(ownPackage, "com.focusguard.BlockedActivity"))
         service.onAccessibilityEvent(windowStateChangedEvent(OTHER_APP))
 
         assertNotNull(shadowOf(service).nextStartedActivity)
@@ -214,7 +225,7 @@ class FocusGuardAccessibilityServiceTest : AccessibilityServiceTestBase() {
 
             // The user opens FocusGuard (leaving the app — its alarm is dropped) and sets a bedtime
             // starting in 10 minutes.
-            service.onAccessibilityEvent(windowStateChangedEvent(PACKAGE_NAME, "com.focusguard.MainActivity"))
+            service.onAccessibilityEvent(windowStateChangedEvent(ownPackage, "com.focusguard.MainActivity"))
             verify { timeLimitScheduler.cancelBlock(OTHER_APP) }
             settingsRepository.setBedtime(TimeWindow(21, 10, 7, 0))
             awaitField<TimeWindow?>("bedtimeCache") { it != null }
@@ -248,7 +259,7 @@ class FocusGuardAccessibilityServiceTest : AccessibilityServiceTestBase() {
         connectService()
         service.onAccessibilityEvent(windowStateChangedEvent(OTHER_APP))
 
-        service.onAccessibilityEvent(nonActivityWindowEvent(PACKAGE_NAME))
+        service.onAccessibilityEvent(nonActivityWindowEvent(ownPackage))
 
         verify(exactly = 0) { timeLimitScheduler.cancelBlock(OTHER_APP) }
     }
@@ -315,6 +326,49 @@ class FocusGuardAccessibilityServiceTest : AccessibilityServiceTestBase() {
                     false
                 }
             }
+            assertNull(shadowOf(service).nextStartedActivity)
+        }
+
+    @Test
+    fun `if refreshing usage fails, the limit is still checked against what was recorded`() =
+        runTest {
+            usageRepository.setTodayUsageMinutes(OTHER_APP, 61)
+            blockRuleRepository.setRules(
+                AppBlockRule(packageName = OTHER_APP, label = "Other", strategy = BlockingStrategy.TimeLimit(dailyLimitMinutes = 60)),
+            )
+            service.usageRecorder = mockk { coEvery { recordUpToNow() } throws IllegalStateException("usage stats unavailable") }
+            connectService()
+
+            service.onAccessibilityEvent(windowStateChangedEvent(OTHER_APP))
+
+            awaitCondition { shadowOf(service).nextStartedActivity != null }
+        }
+
+    @Test
+    fun `TimeLimit check that finishes after the user left the app neither arms nor blocks`() =
+        runBlocking {
+            usageRepository.setTodayUsageMinutes(OTHER_APP, 10)
+            blockRuleRepository.setRules(
+                AppBlockRule(packageName = OTHER_APP, label = "Other", strategy = BlockingStrategy.TimeLimit(dailyLimitMinutes = 60)),
+            )
+            val gate = CompletableDeferred<Unit>()
+            val refreshStarted = AtomicBoolean(false)
+            service.usageRecorder =
+                mockk {
+                    coEvery { recordUpToNow() } coAnswers {
+                        refreshStarted.set(true)
+                        gate.await()
+                    }
+                }
+            connectService()
+
+            service.onAccessibilityEvent(windowStateChangedEvent(OTHER_APP))
+            awaitCondition { refreshStarted.get() }
+            service.onAccessibilityEvent(windowStateChangedEvent("com.example.next"))
+            gate.complete(Unit)
+
+            Thread.sleep(200)
+            verify(exactly = 0) { timeLimitScheduler.scheduleBlockIn(OTHER_APP, any(), any(), any()) }
             assertNull(shadowOf(service).nextStartedActivity)
         }
 
@@ -389,7 +443,7 @@ class FocusGuardAccessibilityServiceTest : AccessibilityServiceTestBase() {
         }
 
     @Test
-    fun `collectNodeSignals walks a multi-child tree and only picks up the selected node`() =
+    fun `a content filter matches only the selected tab in a multi-child tree`() =
         runTest {
             webBlockRuleRepository.setContentFilter(ContentFilter.REELS, enabled = true)
             connectServiceWithFilters()
@@ -401,14 +455,12 @@ class FocusGuardAccessibilityServiceTest : AccessibilityServiceTestBase() {
 
             service.onAccessibilityEvent(contentChangedEvent(ContentFilterEngine.INSTAGRAM))
 
-            // Only the selected child's "reel" signal counts — if the unselected sibling's
-            // signal were picked up too this would still pass, so this specifically proves
-            // detection happened (the selected node was reached and its signal matched).
+            // Only the selected child's "reel" signal should be matched.
             assertTrue(AccessibilityService.GLOBAL_ACTION_BACK in shadowOf(service).globalActionsPerformed)
         }
 
     @Test
-    fun `collectNodeSignals returns no detection when rootInActiveWindow is null`() =
+    fun `no window content means no content-filter detection`() =
         runTest {
             webBlockRuleRepository.setContentFilter(ContentFilter.REELS, enabled = true)
             connectServiceWithFilters()

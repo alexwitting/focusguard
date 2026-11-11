@@ -124,4 +124,24 @@ class UsageRecorderTest {
             assertEquals(10L, minutes)
             assertTrue(prefs().getStringSet("open_packages", null).orEmpty().isEmpty())
         }
+
+    @Test
+    fun `shutting the device down ends the open session there`() =
+        runTest {
+            val now = LocalDateTime.of(2026, 3, 10, 12, 0)
+            clock.setNow(now)
+            prefs().edit().putLong("last_processed_timestamp", millis(now.minusMinutes(15))).apply()
+            addEvent("com.app", UsageEvents.Event.ACTIVITY_RESUMED, millis(now.minusMinutes(14)))
+            addEvent("android", UsageEvents.Event.DEVICE_SHUTDOWN, millis(now.minusMinutes(4)))
+
+            recorder().recordUpToNow()
+
+            val session =
+                usageRepository.recordedSessions
+                    .single()
+                    .sessions
+                    .single()
+            assertEquals(10L, Duration.between(session.startTime, session.endTime).toMinutes())
+            assertTrue(prefs().getStringSet("open_packages", null).orEmpty().isEmpty())
+        }
 }

@@ -49,7 +49,7 @@ class UsagePollerWorker
 
             for (rule in rules) {
                 val strategy = rule.strategy
-                if (strategy !is BlockingStrategy.TimeLimit) continue
+                if (!rule.enabled || strategy !is BlockingStrategy.TimeLimit) continue
 
                 val usedMinutes = usageRepository.getTodayUsageMinutes(rule.packageName)
                 val limitMinutes = strategy.dailyLimitMinutes.toLong()
@@ -69,14 +69,14 @@ class UsagePollerWorker
         ) {
             val nm = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "Time Limit Warnings", NotificationManager.IMPORTANCE_DEFAULT),
+                NotificationChannel(CHANNEL_ID, "Time limit warnings", NotificationManager.IMPORTANCE_DEFAULT),
             )
             val notification =
                 NotificationCompat
                     .Builder(applicationContext, CHANNEL_ID)
                     .setSmallIcon(android.R.drawable.ic_dialog_info)
-                    .setContentTitle("$label — time limit warning")
-                    .setContentText("${remainingMinutes}m remaining today")
+                    .setContentTitle("$label")
+                    .setContentText("$remainingMinutes min left of today's limit")
                     .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                     .setAutoCancel(true)
                     .build()
@@ -87,9 +87,8 @@ class UsagePollerWorker
             private const val WORK_NAME = "focusguard_usage_poller"
             private const val CHANNEL_ID = "focusguard_time_limit"
 
-            // In-memory; cleared by MidnightResetWorker.doWork(). UsagePollerWorker and
-            // MidnightResetWorker are separate WorkManager unique work items and can run
-            // concurrently on different executor threads, so this needs a thread-safe set.
+            // Packages warned today; cleared at midnight. Thread-safe: the two workers can run
+            // at the same time.
             val notified80Packages: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
             fun schedule(context: Context) {

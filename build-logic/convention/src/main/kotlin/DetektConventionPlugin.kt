@@ -14,9 +14,7 @@ class DetektConventionPlugin : Plugin<Project> {
                 buildUponDefaultConfig = true
                 parallel = true
                 config.setFrom(files("${rootProject.rootDir}/config/detekt/detekt.yml"))
-                // One baseline file per module — every module applies this same convention
-                // plugin, so a single shared path would have each module's run overwrite
-                // the last one's findings instead of accumulating its own.
+                // One baseline file per module.
                 val modulePathSegment = path.removePrefix(":").replace(":", "-")
                 baseline = file("${rootProject.rootDir}/config/detekt/baseline-$modulePathSegment.xml")
                 autoCorrect = false

@@ -14,14 +14,12 @@ data class HomeState(
     val blockedAttempts: Int = 0,
     val isLoading: Boolean = true,
     val loadError: Boolean = false,
-    // Optimistic defaults: this only reflects a real reading once observeSystemHealth() emits,
-    // so a momentarily-disabled service never flashes a false warning before that first emission.
+    // Assumed healthy until the first reading, so no warning flashes on load.
     val systemHealth: SystemHealth = SystemHealth(accessibilityServiceActive = true, vpnServiceActive = true),
 ) {
     /**
-     * Today's screen time. Prefers the day's total from [weeklyTotals], which sums every session
-     * — the per-app list leaves out apps used for under a minute, so summing it undercounts, and
-     * the weekly average this number is compared against is built from the same daily totals.
+     * Today's screen time: the day's total from [weeklyTotals], which includes sub-minute use and
+     * matches what the weekly average is built from. Falls back to the per-app sum.
      */
     val totalMinutesToday: Int
         get() = weeklyTotals.firstOrNull { it.date == today }?.totalMinutes ?: dailyUsage.sumOf { it.totalMinutes }
@@ -33,10 +31,7 @@ data class HomeState(
         get() = weeklyAppBreakdown.filter { it.totalMinutes >= MIN_LISTED_MINUTES }
 
     private companion object {
-        /**
-         * Matches UsageDao, which already drops apps under a minute; this guards the UI against
-         * any other source of 0-minute rows. Same cutoff as the Block tab's "Xm today".
-         */
+        /** Same one-minute cutoff as UsageDao and the Block tab's "Xm today". */
         const val MIN_LISTED_MINUTES = 1
     }
 }

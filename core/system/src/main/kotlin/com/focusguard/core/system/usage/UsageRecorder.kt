@@ -21,12 +21,9 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Reads UsageStatsManager events since the last checkpoint and stores them as usage sessions.
- *
- * Shared by UsagePollerWorker (every ~15 minutes) and the accessibility service (right before a
- * time-limit decision, so the limit is checked against usage up to *now* rather than whatever
- * the last poll happened to record). A [Mutex] serialises the two so a window is never read
- * twice or skipped.
+ * Stores usage sessions from UsageStatsManager events since the last checkpoint. Called by
+ * UsagePollerWorker and by the accessibility service before a time-limit check; a [Mutex] keeps
+ * them from reading the same window twice.
  */
 @Singleton
 class UsageRecorder
@@ -46,13 +43,8 @@ class UsageRecorder
             }
 
         /**
-         * Windows from the last successfully-processed timestamp, not a fixed "now minus 15
-         * minutes" — WorkManager's periodic interval is a minimum, not a guarantee, and real
-         * executions can land later than that (Doze, standby-bucket throttling, OS scheduling
-         * slack). A fixed rolling window would silently and permanently drop whatever usage
-         * happened before its start once a gap exceeds it. The checkpoint (and the set of apps
-         * still open at it) only advances after events are recorded, so a failed run retries the
-         * same window rather than skipping it.
+         * Reads from the saved checkpoint rather than a fixed window, since WorkManager runs can be
+         * late. The checkpoint and open-app set only advance after the sessions are saved.
          */
         private suspend fun record(windowEnd: Long) {
             val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager ?: return
@@ -60,8 +52,7 @@ class UsageRecorder
             val windowStart = prefs.getLong(KEY_LAST_PROCESSED_TIMESTAMP, windowEnd - FIRST_RUN_WINDOW_MS)
             if (windowEnd <= windowStart) return
 
-            // A long gap means the device was off or the app was killed; whatever was open then
-            // has certainly closed since, and counting it as open for hours would be wrong.
+            // After a long gap (device off, app killed) earlier open apps have certainly closed.
             val openAtStart =
                 if (windowEnd - windowStart > MAX_CARRY_OVER_GAP_MS) {
                     emptySet()
@@ -88,7 +79,6 @@ class UsageRecorder
                             AppUsageRecord(
                                 packageName = pkg,
                                 date = date,
-                                totalMinutes = 0,
                                 sessions =
                                     pairsForDate.map { (s, e) ->
                                         UsageSession(startTime = Instant.ofEpochMilli(s), endTime = Instant.ofEpochMilli(e))
@@ -105,8 +95,7 @@ class UsageRecorder
                 .apply()
         }
 
-        // SCREEN_NON_INTERACTIVE / DEVICE_SHUTDOWN are API 28 constants, but they're plain ints
-        // and those events simply never appear on older devices.
+        // API 28 event types; they never occur on older devices.
         @SuppressLint("InlinedApi")
         private fun readEvents(events: UsageEvents): List<UsageSessionEngine.UsageEvent> {
             val event = UsageEvents.Event()
@@ -129,7 +118,7 @@ class UsageRecorder
 
         private fun Long.toLocalDate(): LocalDate = Instant.ofEpochMilli(this).atZone(ZoneId.systemDefault()).toLocalDate()
 
-        /** A late-night session is split at midnight so each day's total only counts its own part. */
+        /** Splits a session at midnight so each day only counts its own part. */
         private fun splitAtMidnight(
             start: Long,
             end: Long,
@@ -153,7 +142,7 @@ class UsageRecorder
         }
 
         companion object {
-            // Fallback window for the very first run only — see record()'s doc comment.
+            // Window used on the very first run, before there's a checkpoint.
             private const val FIRST_RUN_WINDOW_MS = 15 * 60 * 1000L
             private const val MAX_CARRY_OVER_GAP_MS = 6 * 60 * 60 * 1000L
             private const val PREFS_NAME = "focusguard_usage_poller_state"

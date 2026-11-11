@@ -1,120 +1,97 @@
 package com.focusguard.core.data.repository
 
 import android.content.pm.ApplicationInfo
-import android.content.pm.PackageManager
-import com.focusguard.core.data.local.dao.AppBlockRuleDao
-import com.focusguard.core.data.local.entity.toEntity
+import com.focusguard.core.data.DataTestEnvironment
 import com.focusguard.core.domain.model.AppBlockRule
 import com.focusguard.core.domain.model.AppCategory
 import com.focusguard.core.domain.model.BlockingStrategy
-import io.mockk.coEvery
-import io.mockk.coVerify
-import io.mockk.every
-import io.mockk.mockk
+import com.focusguard.core.domain.model.TimeWindow
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertNull
-import org.junit.jupiter.api.Test
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import java.time.DayOfWeek
 
+/** App rules saved to a real Room database and joined with Robolectric's installed apps. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
 class AppBlockRuleRepositoryImplTest {
-    private val dao = mockk<AppBlockRuleDao>()
-    private val packageManager = mockk<PackageManager>()
-    private val repository = AppBlockRuleRepositoryImpl(dao, packageManager)
+    private val env = DataTestEnvironment()
+    private val repository = AppBlockRuleRepositoryImpl(env.db.appBlockRuleDao(), env.packageManager)
 
-    private fun appInfo(
-        pkg: String,
-        flags: Int = 0,
-        category: Int = ApplicationInfo.CATEGORY_UNDEFINED,
-    ) = ApplicationInfo().apply {
-        packageName = pkg
-        this.flags = flags
-        this.category = category
-    }
+    @After
+    fun tearDown() = env.close()
+
+    private suspend fun apps() =
+        repository
+            .getAllAppsWithRules()
+            .first()
+            .filter { it.packageName.startsWith("com.example.") }
 
     @Test
-    fun `getAppBlockRules maps entities to domain models`() =
+    fun `installed user apps are listed by label with their rules, system apps left out`() =
         runTest {
-            val rule = AppBlockRule(packageName = "com.app", label = "App", strategy = BlockingStrategy.AlwaysBlock)
-            every { dao.getAll() } returns flowOf(listOf(rule.toEntity()))
-
-            val result = repository.getAppBlockRules().first()
-
-            assertEquals(listOf(rule), result)
-        }
-
-    @Test
-    fun `getAllAppsWithRules merges installed apps with existing rules and filters system apps`() =
-        runTest {
-            val rule = AppBlockRule(packageName = "com.rules", label = "Has Rule", strategy = BlockingStrategy.AlwaysBlock)
-            every { dao.getAll() } returns flowOf(listOf(rule.toEntity()))
-            every { packageManager.getInstalledApplications(0) } returns
-                listOf(
-                    appInfo("com.rules", category = ApplicationInfo.CATEGORY_SOCIAL),
-                    appInfo("com.norule"),
-                    appInfo("com.system", flags = ApplicationInfo.FLAG_SYSTEM),
-                )
-            every { packageManager.getApplicationLabel(any()) } answers {
-                when (firstArg<ApplicationInfo>().packageName) {
-                    "com.rules" -> "Has Rule"
-                    "com.norule" -> "No Rule"
-                    else -> "System App"
-                }
-            }
-
-            val result = repository.getAllAppsWithRules().first()
-
-            // Sorted by label, case-insensitive: "Has Rule" < "No Rule"
-            assertEquals(listOf("com.rules", "com.norule"), result.map { it.packageName })
-            assertEquals(rule, result.first { it.packageName == "com.rules" }.rule)
-            assertNull(result.first { it.packageName == "com.norule" }.rule)
-            assertEquals(AppCategory.SOCIAL, result.first { it.packageName == "com.rules" }.category)
-        }
-
-    @Test
-    fun `getAllAppsWithRules maps every ApplicationInfo category to its AppCategory`() =
-        runTest {
-            every { dao.getAll() } returns flowOf(emptyList())
-            every { packageManager.getInstalledApplications(0) } returns
-                listOf(
-                    appInfo("com.video", category = ApplicationInfo.CATEGORY_VIDEO),
-                    appInfo("com.audio", category = ApplicationInfo.CATEGORY_AUDIO),
-                    appInfo("com.game", category = ApplicationInfo.CATEGORY_GAME),
-                    appInfo("com.productivity", category = ApplicationInfo.CATEGORY_PRODUCTIVITY),
-                    appInfo("com.news", category = ApplicationInfo.CATEGORY_NEWS),
-                    appInfo("com.other", category = ApplicationInfo.CATEGORY_UNDEFINED),
-                )
-            every { packageManager.getApplicationLabel(any()) } answers { firstArg<ApplicationInfo>().packageName }
-
-            val result = repository.getAllAppsWithRules().first().associateBy { it.packageName }
-
-            assertEquals(AppCategory.VIDEO, result.getValue("com.video").category)
-            assertEquals(AppCategory.VIDEO, result.getValue("com.audio").category)
-            assertEquals(AppCategory.GAMES, result.getValue("com.game").category)
-            assertEquals(AppCategory.PRODUCTIVITY, result.getValue("com.productivity").category)
-            assertEquals(AppCategory.NEWS, result.getValue("com.news").category)
-            assertEquals(AppCategory.OTHER, result.getValue("com.other").category)
-        }
-
-    @Test
-    fun `upsertAppBlockRule saves the mapped entity`() =
-        runTest {
-            val rule = AppBlockRule(packageName = "com.app", label = "App", strategy = BlockingStrategy.AlwaysBlock)
-            coEvery { dao.upsert(any()) } returns Unit
+            env.installApp("com.example.zebra", "zebra")
+            env.installApp("com.example.alpha", "Alpha", category = ApplicationInfo.CATEGORY_SOCIAL)
+            env.installApp("com.example.system", "System thing", system = true)
+            val rule = AppBlockRule(packageName = "com.example.alpha", label = "Alpha", strategy = BlockingStrategy.TimeLimit(45))
 
             repository.upsertAppBlockRule(rule)
 
-            coVerify(exactly = 1) { dao.upsert(rule.toEntity()) }
+            val listed = apps()
+            assertEquals(listOf("com.example.alpha", "com.example.zebra"), listed.map { it.packageName })
+            assertEquals(rule, listed.first().rule)
+            assertNull(listed.last().rule)
+            assertEquals(AppCategory.SOCIAL, listed.first().category)
         }
 
     @Test
-    fun `deleteAppBlockRule delegates to the DAO`() =
+    fun `every strategy survives a save and reload, and replacing or removing a rule takes effect`() =
         runTest {
-            coEvery { dao.deleteByPackageName("com.app") } returns Unit
+            val schedule =
+                BlockingStrategy.ScheduledBlock(
+                    listOf(TimeWindow(9, 0, 17, 30, setOf(DayOfWeek.MONDAY, DayOfWeek.FRIDAY)), TimeWindow(22, 0, 6, 0)),
+                )
+            val saved =
+                listOf(
+                    AppBlockRule(packageName = "com.a", label = "A", strategy = BlockingStrategy.AlwaysBlock),
+                    AppBlockRule(packageName = "com.b", label = "B", strategy = BlockingStrategy.TimeLimit(20), enabled = false),
+                    AppBlockRule(packageName = "com.c", label = "C", strategy = schedule),
+                )
+            saved.forEach { repository.upsertAppBlockRule(it) }
+            assertEquals(saved.toSet(), repository.getAppBlockRules().first().toSet())
 
-            repository.deleteAppBlockRule("com.app")
+            repository.upsertAppBlockRule(saved[0].copy(strategy = BlockingStrategy.TimeLimit(5)))
+            repository.deleteAppBlockRule("com.c")
 
-            coVerify(exactly = 1) { dao.deleteByPackageName("com.app") }
+            val after = repository.getAppBlockRules().first().associateBy { it.packageName }
+            assertEquals(BlockingStrategy.TimeLimit(5), after.getValue("com.a").strategy)
+            assertTrue("com.c" !in after)
+        }
+
+    @Test
+    fun `app categories map onto the app's own groups`() =
+        runTest {
+            val categories =
+                mapOf(
+                    ApplicationInfo.CATEGORY_VIDEO to AppCategory.VIDEO,
+                    ApplicationInfo.CATEGORY_AUDIO to AppCategory.VIDEO,
+                    ApplicationInfo.CATEGORY_GAME to AppCategory.GAMES,
+                    ApplicationInfo.CATEGORY_PRODUCTIVITY to AppCategory.PRODUCTIVITY,
+                    ApplicationInfo.CATEGORY_NEWS to AppCategory.NEWS,
+                    ApplicationInfo.CATEGORY_UNDEFINED to AppCategory.OTHER,
+                )
+            val entries = categories.entries.toList()
+            entries.forEachIndexed { i, (category, _) -> env.installApp("com.example.app$i", "App $i", category = category) }
+
+            val listed = apps().associate { it.packageName to it.category }
+
+            entries.forEachIndexed { i, (_, expected) -> assertEquals(expected, listed["com.example.app$i"]) }
         }
 }

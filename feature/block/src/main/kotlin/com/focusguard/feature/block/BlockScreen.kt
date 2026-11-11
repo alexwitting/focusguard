@@ -537,7 +537,7 @@ private fun BrowserScanPrompt(onEnable: () -> Unit) {
             Column(Modifier.weight(1f)) {
                 Text("These sites aren't blocked yet", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "Turn on the browser scan so FocusGuard can close them in your browser.",
+                    "Turn on the browser scan to block them.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -690,13 +690,6 @@ private fun ContentTab(
         contentPadding = PaddingValues(start = ScreenGutter, end = ScreenGutter, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        item {
-            Text(
-                "Keep the app, lose the feed. FocusGuard closes these the moment they open.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
         items(CONTENT_FILTERS.size) { index ->
             val info = CONTENT_FILTERS[index]
             val checked = info.filter in activeFilters

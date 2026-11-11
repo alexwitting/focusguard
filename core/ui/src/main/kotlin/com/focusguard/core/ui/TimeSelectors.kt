@@ -41,10 +41,7 @@ fun formatClock(
     minute: Int,
 ): String = "%02d:%02d".format(hour, minute)
 
-/**
- * A tappable time tile ("Allowed from 09:00") that opens a Material time picker dialog.
- * Replaces typed HH / MM fields, which let users enter invalid times.
- */
+/** A time tile ("Allowed from 09:00") that opens a time picker when tapped. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TimeField(

@@ -16,6 +16,7 @@ class SetBedtimeUseCase(
         window: TimeWindow?,
         token: PinVerificationToken?,
     ) {
+        require(window?.isZeroLength != true) { "Bedtime needs different start and end times" }
         pinRepository.requireValidTokenIfEnabled(token, "change bedtime", clockProvider)
         settingsRepository.setBedtime(window)
     }

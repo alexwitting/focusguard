@@ -5,20 +5,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Pure Kotlin — no Android imports. Second website-blocking backend alongside the DNS-VPN path
- * (DnsVpnService), for standalone use or when another VPN app is already active. The
- * accessibility service walks the on-screen node tree (Android-specific) and hands this engine
- * a single best-effort address-bar string to match against the same web-block rules the VPN
- * path uses.
- *
- * Deliberately does NOT fall back to scanning arbitrary visible screen text when the address bar
- * can't be confirmed (e.g. a browser's tab-switcher grid, or a captcha/permission dialog — states
- * where the address bar legitimately isn't present at all). That used to be the fallback tier
- * here, and it caused real false positives: a blocked domain showing up as a tab-preview title,
- * or coincidentally as unrelated dialog copy, would trigger a block even though the user wasn't
- * actually on that page. [addressBarText] being null means "not confirmed to be viewing a page
- * right now" — the caller is responsible for producing it from a genuine address-bar signal only
- * (see FocusGuardAccessibilityService.findHeuristicAddressBarText for the unmapped-browser case).
+ * Matches a browser's address-bar text against website rules, for the accessibility service's
+ * browser scan. A null [addressBarText] means no address bar is visible, so nothing is matched.
  */
 @Singleton
 class WebContentFilterEngine
@@ -46,12 +34,8 @@ class WebContentFilterEngine
 
         companion object {
             /**
-             * Best-effort filter for FocusGuardAccessibilityService.findHeuristicAddressBarText
-             * (the unmapped-browser fallback): true only for text shaped like a bare URL/hostname
-             * — no whitespace, a dot-separated host with a plausible TLD — not ordinary prose.
-             * Deliberately conservative: a false negative here just means no coverage for that
-             * unmapped browser, while a false positive would reintroduce blind-substring-style
-             * false blocks (a tab-preview title or dialog copy mentioning a domain in passing).
+             * True for text shaped like a URL or hostname (no spaces, dotted host, letter TLD).
+             * Used to pick out an address bar in browsers with no known address-bar id.
              */
             fun looksLikeUrl(text: String): Boolean {
                 val trimmed = text.trim()
@@ -83,11 +67,8 @@ class WebContentFilterEngine
                 )
 
             /**
-             * Best-effort — these resource-ids are not a stable API and will drift across
-             * browser updates. Browsers not listed here get the [looksLikeUrl]-filtered
-             * heuristic scan instead (see FocusGuardAccessibilityService); a browser listed here
-             * whose id isn't currently found gets no detection at all for that event (see
-             * [detect]'s doc comment for why).
+             * Address-bar view ids per browser. Not a stable API; may change with browser updates.
+             * Browsers not listed fall back to the [looksLikeUrl] heuristic.
              */
             val URL_BAR_RESOURCE_IDS =
                 mapOf(

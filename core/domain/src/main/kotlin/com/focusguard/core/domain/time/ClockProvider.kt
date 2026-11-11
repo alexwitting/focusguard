@@ -4,10 +4,8 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 
 /**
- * The single seam for "what time is it right now" — anything that needs the current date/time
- * for business logic (not pure UI display) should go through this instead of calling
- * `LocalDate.now()`/`LocalDateTime.now()`/`System.currentTimeMillis()` directly, so tests can
- * control it and midnight-rollover behavior is consistent everywhere it matters.
+ * The current date and time for business logic. Use this instead of `LocalDate.now()`,
+ * `LocalDateTime.now()` or `System.currentTimeMillis()` so tests can control time.
  */
 interface ClockProvider {
     fun today(): LocalDate

@@ -26,12 +26,7 @@ class SystemHealthRepositoryImpl
     constructor(
         @param:ApplicationContext private val context: Context,
     ) : SystemHealthRepository {
-        // A raw `while (true) { emit(check()) }` would let one transient failure (any of the
-        // system services above throwing, e.g. a flaky OEM AccessibilityManager/ConnectivityManager
-        // call) propagate out of the flow builder and permanently end the polling loop for the
-        // rest of the process's lifetime — collectors would silently stop receiving updates
-        // forever, not just miss one tick. Catching per-iteration keeps the poll alive so a
-        // one-off failure self-heals on the next tick instead of freezing health status forever.
+        // Each check is caught on its own so one failing system call can't end the polling loop.
         override fun observeSystemHealth(): Flow<SystemHealth> =
             flow {
                 while (true) {
@@ -70,19 +65,9 @@ class SystemHealthRepositoryImpl
         }
 
         /**
-         * Scans every current network's capabilities for TRANSPORT_VPN, checked fresh on every
-         * 30s poll and on-demand refresh — deliberately a synchronous snapshot, not an
-         * event-driven NetworkCallback. This repository is a process-lifetime Hilt singleton, and
-         * DnsVpnService's tunnel is a separate foreground service that can outlive the main
-         * process across an OS-triggered restart; a callback only reports transitions seen
-         * *after* it's registered, so it would report permanently inactive if the tunnel was
-         * already up before the singleton was (re-)created. A snapshot has no such blind spot.
-         * `allNetworks` is deprecated in favor of callback-based tracking, but a callback can't
-         * answer "is a VPN active right now" for a tunnel that predates it — so the deprecated,
-         * synchronous API is the correct tool here, not an oversight.
-         * `activeNetwork` alone can't substitute for the scan either: DnsVpnService only claims a
-         * narrow single-host route (see DnsVpnService.kt), not a full-tunnel default route, so it
-         * never becomes the OS's "active" network.
+         * Whether any current network is a VPN. A fresh snapshot each time, because a
+         * NetworkCallback only reports changes after it's registered and would miss a tunnel that
+         * was already up. The DNS VPN only routes one host, so it's never the active network.
          */
         @Suppress("DEPRECATION")
         private fun hasActiveVpnNetwork(): Boolean {

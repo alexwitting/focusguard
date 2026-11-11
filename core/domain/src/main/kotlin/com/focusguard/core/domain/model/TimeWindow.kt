@@ -19,6 +19,12 @@ data class TimeWindow(
     }
 
     /**
+     * True when start and end are the same minute. Saving such a window is refused, since it
+     * covers only that one minute; one already stored still loads.
+     */
+    val isZeroLength: Boolean get() = startHour == endHour && startMinute == endMinute
+
+    /**
      * Whether [now] falls inside this window. Both ends are inclusive at minute precision.
      *
      * A window that crosses midnight (start after end, e.g. 22:00–07:00) belongs to the day it

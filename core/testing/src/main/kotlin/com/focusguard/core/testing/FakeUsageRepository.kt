@@ -50,7 +50,8 @@ class FakeUsageRepository : UsageRepository {
 
     override fun getDailyUsage(date: LocalDate): Flow<List<AppUsageSummary>> = _dailyUsage.map { it[date] ?: emptyList() }
 
-    override fun getWeeklyTotals(endDate: LocalDate): Flow<List<DailyTotal>> = _weeklyTotals
+    /** Like the real query, only the seven days ending at [endDate]. */
+    override fun getWeeklyTotals(endDate: LocalDate): Flow<List<DailyTotal>> = _weeklyTotals.map { totals -> totals.filter { it.date in endDate.minusDays(6)..endDate } }
 
     override fun getWeeklyAppBreakdown(endDate: LocalDate): Flow<List<AppUsageSummary>> = _weeklyAppBreakdown
 

@@ -22,8 +22,6 @@ class WebBlockRuleRepositoryImpl
     ) : WebBlockRuleRepository {
         override fun getWebBlockRules(): Flow<List<WebBlockRule>> = dao.getAll().map { entities -> entities.map { it.toDomain() } }
 
-        override fun getEnabledDomains(): Flow<Set<String>> = dao.getEnabledDomains().map { it.toSet() }
-
         override fun getContentFilters(): Flow<Set<ContentFilter>> =
             dataStore.data.map { prefs ->
                 buildSet {

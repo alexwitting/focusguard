@@ -82,7 +82,7 @@ UI (Compose)  →Intent→  ViewModel  →  UseCases  →  Repository interfaces
 - No LiveData anywhere.
 - All blocking decision logic lives in pure-Kotlin engine classes (`AppBlockingEngine`, `DnsFilterEngine`), never directly in `AccessibilityService` or `VpnService`.
 - **Error handling:** mutation methods wrap the call in `runCatching { ... }.onSuccess { }.onFailure { Log.e(TAG, "...", it); emit(Effect.ShowSnackbar(...)) }`. A `combine(...).collect { }` in `init` that drives the screen's primary state should have a `.catch { }` upstream of `collect` — an uncaught exception there silently ends the flow forever (the screen freezes with no further updates and no error shown), not just for that one tick. See `SystemHealthRepositoryImpl`'s polling loops for the same reasoning applied to a repository-level `flow { while (true) { ... } }`.
-- **Time/date access:** business logic never calls `LocalDate.now()` / `LocalDateTime.now()` / `System.currentTimeMillis()` directly — inject `ClockProvider` (`:core:domain/time/ClockProvider.kt`) instead, and use `FakeClockProvider` (`:core:testing`) in tests. This exists because untestable direct time calls previously caused real midnight-rollover bugs (see `BlockViewModel`'s `dateTicker()` comment). The two sanctioned exceptions are pure UI display code (e.g. a Composable just rendering "today's date") and one-shot alarm-scheduling math that's about real wall-clock time by definition (`MidnightResetWorker`'s next-midnight delay calculation).
+- **Time/date access:** business logic never calls `LocalDate.now()` / `LocalDateTime.now()` / `System.currentTimeMillis()` directly — inject `ClockProvider` (`:core:domain/time/ClockProvider.kt`) instead, and use `FakeClockProvider` (`:core:testing`) in tests. This keeps date-dependent behavior such as midnight rollover testable (see `BlockViewModel.dateTicker()`). The two sanctioned exceptions are pure UI display code (e.g. a Composable just rendering "today's date") and one-shot alarm-scheduling math that's about real wall-clock time by definition (`MidnightResetWorker`'s next-midnight delay calculation).
 
 ## Convention Plugins (build-logic)
 
@@ -107,7 +107,7 @@ Defined in `:core:domain/src/main/kotlin/com/focusguard/core/domain/`:
 - `WebBlockRule` — eTLD+1 domain + blockSubdomains flag
 - `ContentFilter` — enum: `REELS`, `SHORTS`, `TIKTOK_FYP`
 - `BlockDecision` — sealed: `Allow` or `Block(BlockReason)`
-- `PinVerificationToken` — `issuedAt: Instant`, 5-min expiry, `isValid` computed property
+- `PinVerificationToken` — `issuedAt: Instant`, 5-min expiry, `isValidAt(now)` (callers pass `ClockProvider` time)
 - `AppWithRule`, `AppUsageSummary`, `DailyTotal`, `PermissionsHealth`, `SystemHealth`
 
 Also in `:core:domain` but not a data model — `ClockProvider` (`time/ClockProvider.kt`): the current-time seam described under Architecture — MVI above.
@@ -116,7 +116,7 @@ Also in `:core:domain` but not a data model — `ClockProvider` (`time/ClockProv
 
 - `DatabaseModule` — Room DB, DAOs, DataStore, `EncryptedSharedPreferences`. Persistence only; a raw Android system service with no persistence angle (e.g. `PackageManager`) does not belong here.
 - `RepositoryModule` — one `@Binds @Singleton` per repository interface, including `ClockProvider` (bound to `SystemClockProvider`).
-- `SystemServiceModule` — raw Android system-service `@Provides` functions that aren't repository- or persistence-shaped (currently just `PackageManager`).
+- `SystemServiceModule` — raw Android system-service `@Provides` functions that aren't repository- or persistence-shaped (e.g. `PackageManager`).
 - Each feature module owns its own `di/<Feature>UseCaseModule.kt` with one `@Provides` per UseCase it needs, constructed from repository interfaces (and `ClockProvider` where relevant) — UseCases themselves are plain classes, not `@Inject`-constructed, so they're wired explicitly here rather than relying on Hilt's constructor injection.
 - `:app`-only UseCases (e.g. `RequestExtensionUseCase`, used by `BlockedViewModel`) get their own small module under `app/.../di/` following the same one-module-per-concern pattern rather than being bolted onto an unrelated module.
 
@@ -142,20 +142,24 @@ All UseCase mutations that modify rules accept `token: PinVerificationToken?`. T
 
 Versions live in `gradle/libs.versions.toml`. Always add deps there, not inline.
 
-## Current State
+## CI
 
-All layers are implemented and wired end to end: `:core:domain` UseCases/models, `:core:data` Room+DataStore repositories, `:core:system` (`FocusGuardAccessibilityService`, `DnsVpnService`, WorkManager pollers, `TimeLimitScheduler`), and all four feature screens (Home, Block, Settings, Onboarding) plus `BlockedActivity`. CI (`.github/workflows/focusguard.yml`) runs `ktlintCheck detekt` + `test` + coverage reports + `koverVerify` (the coverage gates fail the build) on every push/PR to `master`; a manual `workflow_dispatch` toggle can additionally build and upload the debug APK. Instrumented tests are not yet wired into CI — run them locally via `connectedAndroidTest`.
-
-Work generally proceeds bug/feature-at-a-time now rather than in the original phase order — when picking up new work, `git log` and the module structure above are the source of truth, not a phase number.
+CI (`.github/workflows/focusguard.yml`) runs `ktlintCheck detekt` + `test` + coverage reports + `koverVerify` (the coverage gates fail the build) on every push/PR to `master`; a manual `workflow_dispatch` toggle can additionally build and upload the debug APK. Instrumented tests don't run in CI — run them locally via `connectedAndroidTest`.
 
 ## Testing Conventions
 
-- JUnit 5 (`@Test` from `org.junit.jupiter.api`) in all JVM modules (`:core:domain`, `:core:system`, `:core:testing`), except files that opt into Robolectric's own JUnit4 `@RunWith(RobolectricTestRunner::class)` runner directly (see `FocusGuardAccessibilityServiceTest`'s header comment for why that one file departs from the JUnit5 bridge).
-- JUnit 4 for Android instrumented tests (`core/system/src/androidTest`) — currently covers `FocusGuardAccessibilityService`'s real OS-integration behavior (real accessibility-service binding, real event dispatch, real back-navigation, real node-tree walk). Run via `./gradlew :core:system:connectedDebugAndroidTest`; needs a device/emulator. If multiple devices are attached, set `ANDROID_SERIAL` first — these tests toggle real system accessibility settings.
-- MockK for mocking; `flowOf(...)` to stub Flow-returning repository methods; `Fake*Repository`/`FakeClockProvider` (`:core:testing`) for sociable ViewModel tests instead of mocking every dependency.
+- **Top-down.** Test each module from its outermost entry point with real collaborators, then add lower-level tests only for logic and branches the outer tests can't reach:
+  - features and `:app`: ViewModels driven by intents, over real UseCases and `:core:testing` fakes;
+  - `:core:domain`: behaviour tests over the UseCases with the fakes (`PinProtectionTest`, `UsageAndSettingsTest`), not one mock-based test per UseCase;
+  - `:core:data`: repositories over real storage via `DataTestEnvironment` (in-memory Room, a real DataStore file, Robolectric's package manager), not mocked DAOs;
+  - `:core:system`: the accessibility service, VPN service, workers and receivers under Robolectric; engine tests cover the remaining decision tables.
+  Mock only at system boundaries the fakes and Robolectric can't stand in for. Don't add a test just to touch a line — if code is only reachable from another module, it's covered there, and unused code gets deleted.
+- JUnit 5 (`@Test` from `org.junit.jupiter.api`) in all JVM modules (`:core:domain`, `:core:system`, `:core:testing`), except files that opt into Robolectric's own JUnit4 `@RunWith(RobolectricTestRunner::class)` runner directly (see `AccessibilityServiceTestBase`'s header comment for why those files depart from the JUnit5 bridge).
+- JUnit 4 for Android instrumented tests (`core/system/src/androidTest`) — covers `FocusGuardAccessibilityService`'s real OS-integration behavior (real accessibility-service binding, real event dispatch, real back-navigation, real node-tree walk). Run via `./gradlew :core:system:connectedDebugAndroidTest`; needs a device/emulator. If multiple devices are attached, set `ANDROID_SERIAL` first — these tests toggle real system accessibility settings.
+- `Fake*Repository`/`FakeClockProvider` (`:core:testing`) are the default collaborators; MockK is for system boundaries (WorkManager, system services) and for forcing a failure.
 - Turbine for Flow assertions: `flow.test { assertEquals(..., awaitItem()) }`
 - `runTest` from `kotlinx.coroutines.test` for suspend functions
 - A ViewModel method that launches on `Dispatchers.IO` explicitly (e.g. `forceRefresh()`) isn't touched by `MainDispatcherExtension` (which only swaps `Dispatchers.Main`) — poll with a bounded real-time `awaitCondition { ... }` helper instead of asserting immediately; see `SettingsViewModelTest`/`OnboardingViewModelTest` for the pattern.
 - Engine classes (`AppBlockingEngine`, `DnsFilterEngine`) target 100% branch coverage.
 - Kover class exclusions (`build-logic/.../KoverConventionPlugin.kt`) match fully-qualified names — use `*.ClassName`, never a bare name. Compose UI files (`*ScreenKt*`, `*DialogKt`, `*SheetKt`) are excluded, so keep testable helpers they need in a separate file.
-- Kover per-module `minBound` gates are a **regression floor, not a target** — set just below currently-measured coverage so an accidental drop fails CI without forcing coverage-chasing busywork. Don't ratchet a gate above 85%; the aggregate root `build.gradle.kts` also gates merged branch coverage at 85%. If a change legitimately raises a module's coverage, it's fine to leave the old (lower) gate in place rather than bumping it every time.
+- Every gated module has a 90% line-coverage `minBound`, and the aggregate root `build.gradle.kts` gates merged branch coverage at 90%. New code needs tests to keep each module above 90%. `:core:ui` is ungated; its code is almost all Compose UI.

@@ -93,8 +93,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     val snackbarState = remember { SnackbarHostState() }
     val context = LocalContext.current
 
-    // Re-check accessibility/VPN/permission health immediately whenever the user returns
-    // from system settings, instead of waiting on the repository's 30-second poll.
+    // Re-check health whenever the user returns from system settings.
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         viewModel.forceRefresh()
     }
@@ -139,7 +138,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                     badText = "Off",
                     fixLabel = "Turn on",
                     issueTitle = "Website blocking (VPN) is off",
-                    issueBody = "Optional — the browser scan still blocks sites without it.",
+                    issueBody = "Optional. The browser scan blocks sites without it.",
                     optional = true,
                     onFix = {
                         val consent = VpnService.prepare(context)
@@ -171,7 +170,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                     okText = "Unrestricted",
                     badText = "Restricted",
                     fixLabel = "Fix",
-                    issueTitle = "FocusGuard may be put to sleep",
+                    issueTitle = "Android may pause FocusGuard",
                     issueBody = "Blocking can stop while the screen is off.",
                     onFix = {
                         context.startActivity(
@@ -191,7 +190,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                         badText = "Not allowed",
                         fixLabel = "Fix",
                         issueTitle = "Exact alarms are off",
-                        issueBody = "Time limits may kick in a little late.",
+                        issueBody = "Time limits may block a few minutes late.",
                         onFix = { context.startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)) },
                     ),
                 )
@@ -206,8 +205,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         ) {
             item { ScreenTitle(title = "Settings") }
 
-            // While the first reading is loading every flag is false, so hold the summary back
-            // rather than flashing "5 things need attention".
+            // Every flag reads false until the first load; don't show the summary before then.
             if (!state.isLoading) {
                 item { StatusSummary(issues = health.filterNot { it.ok || it.optional }) }
             }
@@ -229,7 +227,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                             bedtime?.let {
                                 "${formatClock(it.startHour, it.startMinute)} – " +
                                     "${formatClock(it.endHour, it.endMinute)} · ${describeDays(it.days)}"
-                            } ?: "Block distracting apps overnight",
+                            } ?: "Not set",
                         configured = bedtime != null,
                         setUpLabel = "Set up",
                         menu =
@@ -254,7 +252,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                     RowDivider()
                     ListRow(
                         title = "Browser scan",
-                        subtitle = "Catches sites the VPN can't",
+                        subtitle = "Checks the address bar in your browser",
                         leading = { RowIcon(Icons.Outlined.TravelExplore) },
                         trailing = {
                             when {
@@ -369,7 +367,7 @@ private fun PinRow(
     ManageRow(
         icon = Icons.Outlined.Lock,
         title = "PIN lock",
-        subtitle = if (enabled) "On · needed to change any rule" else "Stop yourself undoing rules on a whim",
+        subtitle = if (enabled) "On · needed to change any rule" else "Require a PIN to change rules",
         configured = enabled,
         setUpLabel = "Set up",
         menu = listOf("Change PIN" to onChange, "Turn off PIN" to onDisable),

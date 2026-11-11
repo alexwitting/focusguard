@@ -42,8 +42,7 @@ class BlockedViewModelTest {
 
     @BeforeEach
     fun setUp() {
-        // Log.e isn't mocked under a plain JVM unit test (no Robolectric here) — only needed by
-        // the failure tests below, but harmless to always stub.
+        // android.util.Log throws in plain JVM tests.
         mockkStatic(android.util.Log::class)
         every { android.util.Log.e(any(), any(), any()) } returns 0
     }

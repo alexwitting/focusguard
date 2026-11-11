@@ -11,10 +11,8 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.focusguard.core.ui.R
 
-// Both fonts are bundled variable TTFs (OFL — see core/ui/licenses/). One Font entry per
-// weight we use, each pinning the variable font's wght axis, so FontWeight resolves to a
-// real instance instead of synthetic bolding. Font(resId, weight, variationSettings) is still
-// marked experimental, but it's the only way to pin an axis on a bundled variable font.
+// Bundled variable fonts (OFL, see core/ui/licenses/). Each weight pins the wght axis so it
+// renders a real weight instead of synthetic bold.
 @OptIn(ExperimentalTextApi::class)
 private fun variableFamily(
     resId: Int,
@@ -72,7 +70,7 @@ private fun text(
     letterSpacing = tracking.em,
 )
 
-// Usage guide (from the redesign canvas):
+// Which style each element uses:
 //   displayLarge   — hero number (today's screen time)
 //   displayMedium  — stepper value in the app-rule sheet
 //   displaySmall   — blocked-screen / onboarding headline

@@ -78,6 +78,9 @@ class BlockViewModel
         // Stored lambda to execute after PIN is verified. Not in state (can't serialize a lambda).
         private var pendingOp: (suspend (PinVerificationToken?) -> Unit)? = null
 
+        // Ignores repeat submits while a PIN check runs, so one entry can't count twice.
+        private var verifyingPin = false
+
         init {
             viewModelScope.launch {
                 dateTicker()
@@ -98,8 +101,7 @@ class BlockViewModel
                     getWebContentBlockingEnabled(),
                     ::BlockScreenData,
                 ).catch { e ->
-                    // Without this an upstream failure would end the flow for good and leave the
-                    // screen stuck on its spinner (see CLAUDE.md, Error handling).
+                    // Ends the spinner and reports the error instead of leaving the flow dead.
                     Log.e(TAG, "Failed to load block list", e)
                     _state.update { it.copy(isLoading = false) }
                     _effects.emit(BlockEffect.ShowSnackbar("Couldn't load your block list"))
@@ -135,19 +137,9 @@ class BlockViewModel
             val browserScanEnabled: Boolean,
         )
 
-        // getDailyUsage(LocalDate.now()) captured once at construction would pin usage stats to
-        // whatever day the ViewModel happened to be created on — Navigation Compose's
-        // ViewModelStore survives backgrounding, so a screen left open across midnight would
-        // silently show yesterday's usage forever. This re-checks the date periodically and only
-        // re-subscribes to getDailyUsage when it actually changes.
-        //
-        // flowOn(Dispatchers.Default) is deliberate, not just an optimization: Dispatchers.Main
-        // gets swapped for a TestDispatcher in ViewModel unit tests (see MainDispatcherExtension),
-        // and this loop's delay() is about real wall-clock date changes, not virtual test time —
-        // running it on Dispatchers.Main under a TestDispatcher backed by an unmanaged
-        // TestCoroutineScheduler caused the delay to resolve near-instantly in a tight loop,
-        // spinning the test at ~100% CPU instead of suspending. Dispatchers.Default is untouched
-        // by Dispatchers.setMain(), so delay() there uses genuine timers.
+        // Re-checks the date every minute so a screen left open past midnight moves to the new
+        // day. Runs on Dispatchers.Default so delay() uses real time even in tests, where
+        // Dispatchers.Main is a test dispatcher.
         private fun dateTicker(): Flow<LocalDate> =
             flow {
                 while (true) {
@@ -222,7 +214,7 @@ class BlockViewModel
                 viewModelScope.launch {
                     runCatching { op(null) }.onFailure { e ->
                         Log.e(TAG, "Operation failed", e)
-                        _effects.emit(BlockEffect.ShowSnackbar("Failed: ${e.message}"))
+                        _effects.emit(BlockEffect.ShowSnackbar("Couldn't save the change"))
                     }
                 }
             } else {
@@ -237,10 +229,18 @@ class BlockViewModel
                 _state.update { it.copy(pinError = "Enter a 6-digit PIN") }
                 return
             }
+            if (verifyingPin) return
+            verifyingPin = true
             viewModelScope.launch {
-                val result = verifyPin(pin)
+                val result =
+                    runCatching { verifyPin(pin) }
+                        .onFailure { e -> Log.e(TAG, "PIN check failed", e) }
+                        .getOrNull()
+                verifyingPin = false
                 val token = (result as? PinAttemptResult.Success)?.token
-                if (token == null) {
+                if (result == null) {
+                    _state.update { it.copy(pinError = "Couldn't check the PIN. Try again.", pinInput = "") }
+                } else if (token == null) {
                     _state.update { it.copy(pinError = result.errorMessage(), pinInput = "") }
                 } else {
                     val op = pendingOp
@@ -249,7 +249,7 @@ class BlockViewModel
                     if (op != null) {
                         runCatching { op(token) }.onFailure { e ->
                             Log.e(TAG, "Operation failed after PIN", e)
-                            _effects.emit(BlockEffect.ShowSnackbar("Failed: ${e.message}"))
+                            _effects.emit(BlockEffect.ShowSnackbar("Couldn't save the change"))
                         }
                     }
                 }

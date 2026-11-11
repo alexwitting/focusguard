@@ -16,12 +16,9 @@ import javax.crypto.spec.PBEKeySpec
 import javax.inject.Inject
 
 /**
- * Stores the PIN as a salted PBKDF2-HMAC-SHA256 hash in [prefs] (EncryptedSharedPreferences).
- *
- * A 6-digit PIN has only a million values, so the hash is deliberately slow: one SHA-256 round
- * (the original format) can be brute-forced from a leaked prefs file in well under a second.
- * Hashes are stored as `pbkdf2:<iterations>:<base64>`; a value with no prefix is the legacy
- * SHA-256 format, which still verifies and is upgraded in place on the next correct entry.
+ * Stores the PIN as a salted PBKDF2-HMAC-SHA256 hash, as `pbkdf2:<iterations>:<base64>`, in
+ * encrypted [prefs]. The slow hash matters because a 6-digit PIN has only a million values.
+ * A stored value in any other format never verifies.
  */
 class PinRepositoryImpl
     @Inject
@@ -42,11 +39,7 @@ class PinRepositoryImpl
             val stored = prefs.getString(KEY_HASH, null) ?: return false
             val salt = Base64.decode(prefs.getString(KEY_SALT, null) ?: return false, Base64.NO_WRAP)
 
-            if (!stored.startsWith(PBKDF2_PREFIX)) {
-                val matches = constantTimeEquals(legacySha256(rawPin, salt), stored)
-                if (matches) storePbkdf2(rawPin) // upgrade the legacy hash now we know the PIN
-                return matches
-            }
+            if (!stored.startsWith(PBKDF2_PREFIX)) return false
 
             val parts = stored.split(':')
             val iterations = parts.getOrNull(1)?.toIntOrNull() ?: return false
@@ -91,7 +84,7 @@ class PinRepositoryImpl
                 .apply()
         }
 
-        /** Runs on Dispatchers.Default — tens of thousands of iterations is too slow for the main thread. */
+        /** Runs on Dispatchers.Default; too slow for the main thread. */
         private suspend fun pbkdf2(
             rawPin: String,
             salt: ByteArray,
@@ -106,15 +99,6 @@ class PinRepositoryImpl
                     spec.clearPassword()
                 }
             }
-
-        private fun legacySha256(
-            rawPin: String,
-            salt: ByteArray,
-        ): String {
-            val digest = MessageDigest.getInstance("SHA-256")
-            digest.update(salt)
-            return Base64.encodeToString(digest.digest(rawPin.toByteArray(Charsets.UTF_8)), Base64.NO_WRAP)
-        }
 
         private fun constantTimeEquals(
             a: String,

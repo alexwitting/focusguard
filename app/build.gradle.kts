@@ -61,8 +61,8 @@ dependencies {
     testImplementation(libs.mockk)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.turbine)
-    // README screenshots: Robolectric renders the real Compose screens, Roborazzi saves PNGs.
-    // JUnit4 + vintage engine for Robolectric's own runner, same as :core:system.
+    // README screenshots: Robolectric renders the screens, Roborazzi saves PNGs. Robolectric's
+    // runner is JUnit4, run through the vintage engine.
     testImplementation(platform(libs.androidx.compose.bom))
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.core)
@@ -78,7 +78,6 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
 
-// Regression gate, not a target — see :core:domain's build.gradle.kts for why.
 // `./gradlew :app:testDebugUnitTest --tests "*ReadmeScreenshots*" -PrecordScreenshots`
 // regenerates docs/screenshots/*.png. Without the flag those tests are skipped.
 tasks.withType<Test>().configureEach {
@@ -86,6 +85,7 @@ tasks.withType<Test>().configureEach {
     systemProperty("focusguard.screenshotDir", rootProject.file("docs/screenshots").absolutePath)
 }
 
+// Fails CI below 90% line coverage.
 kover {
     reports {
         verify {

@@ -6,7 +6,6 @@ import android.content.Intent
 import android.net.Uri
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
-import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
 import com.focusguard.core.domain.model.AppBlockRule
 import com.focusguard.core.domain.model.BlockDecision
@@ -37,6 +36,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.time.LocalDateTime
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
@@ -114,8 +114,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
                 .flowOn(Dispatchers.IO)
                 .collect { enabled -> webContentBlockingEnabledCache.set(enabled) }
         }
-        // Backup foreground signal — see UsageStatsForegroundDetector for why this exists
-        // alongside the AccessibilityEvent-driven path below.
+        // Backup browser check for when accessibility events are delayed or throttled.
         serviceScope.launch {
             while (isActive) {
                 delay(USAGE_STATS_POLL_INTERVAL_MS)
@@ -135,9 +134,8 @@ class FocusGuardAccessibilityService : AccessibilityService() {
 
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> handleWindowStateChanged(pkg, event)
-            // Instagram/YouTube/TikTok swap content in place (fragment/tab change) without a
-            // new window, so window-state events never fire for e.g. opening the Reels tab or
-            // scrolling to the next Reel. Content-changed/scroll events catch that navigation.
+            // In-app navigation (e.g. opening the Reels tab) swaps content without a new window,
+            // so it only shows up as content-changed or scroll events.
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
             AccessibilityEvent.TYPE_VIEW_SCROLLED,
             -> handleContentSignal(pkg, event)
@@ -155,16 +153,14 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         if (filters.isEmpty()) return
 
         val className = event.className?.toString()
-        val nodeSignals = collectNodeSignals(rootInActiveWindow)
+        val nodeSignals = rootInActiveWindow.selectedNodeSignals()
         val detection = contentFilterEngine.detect(pkg, className, filters, nodeSignals)
         if (detection != null) blockContentFilter(detection.label)
     }
 
     /**
-     * FocusGuard's own screens (the block screen, the main app) count as leaving the previous
-     * app. Ignoring them entirely used to leave the blocked app recorded as "still in front", so
-     * picking it from Recents straight off the block screen looked like an in-app event and
-     * skipped the rule check — and after an extension, nothing re-armed the time-limit alarm.
+     * FocusGuard's own screens count as leaving the previous app, so returning to it (e.g. from
+     * Recents) re-checks its rule and re-arms its alarm.
      */
     private fun handleOwnWindow(event: AccessibilityEvent) {
         if (!isActivityWindow(packageName, event.className?.toString())) return
@@ -173,10 +169,8 @@ class FocusGuardAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Whether a window-state event comes from a real Activity of [pkg]. The keyboard, the
-     * notification shade, toasts and in-app dialogs all fire TYPE_WINDOW_STATE_CHANGED too;
-     * treating those as app switches cancelled the outgoing app's time-limit alarm (opening the
-     * keyboard in a limited app stopped its timer) without anything re-arming it.
+     * Whether a window-state event comes from an Activity of [pkg]. The keyboard, notification
+     * shade, toasts and dialogs fire the same event but aren't app switches.
      */
     private fun isActivityWindow(
         pkg: String,
@@ -195,8 +189,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         val className = event.className?.toString()
         val prev = currentForegroundPkg.get()
 
-        // A non-activity window from some other package (keyboard, shade, toast) isn't an app
-        // switch — leave the current app and its timer alone.
+        // Keyboard, shade or toast from another package: not an app switch.
         if (prev != pkg && !isActivityWindow(pkg, className)) return
 
         if (prev == pkg) {
@@ -233,42 +226,51 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         val bedtime = bedtimeCache.get()
 
         if (strategy is BlockingStrategy.TimeLimit) {
-            serviceScope.launch(Dispatchers.IO) {
-                // Usage is otherwise only written every ~15 minutes; record up to now so the
-                // limit is checked against what's actually been used, not the last poll.
-                runCatching { usageRecorder.recordUpToNow() }.onFailure { Log.w(TAG, "Usage refresh failed", it) }
-                val used = usageRepository.getTodayUsageMinutes(pkg).toLong()
-                val extensionTaken =
-                    settingsRepository
-                        .hasTakenExtensionToday(pkg, clockProvider.today())
-                        .first()
-                val effectiveLimit = strategy.dailyLimitMinutes + if (extensionTaken) ExtensionPolicy.MINUTES else 0
-                val effectiveRule = rule.copy(strategy = BlockingStrategy.TimeLimit(effectiveLimit))
-                val decision = blockingEngine.decide(effectiveRule, now, used, bedtime)
-                if (decision is BlockDecision.Block) {
-                    launchBlockedScreen(pkg, rule.label, decision.reason)
-                } else {
-                    val limitDelayMs = (effectiveLimit.toLong() - used) * MILLIS_PER_MINUTE
-                    val upcoming = blockingEngine.nextBlock(rule, now, bedtime)
-                    // One alarm per app, so arm whichever comes first: the limit running out or
-                    // bedtime starting.
-                    if (upcoming != null && upcoming.delay.toMillis() < limitDelayMs) {
-                        timeLimitScheduler.scheduleBlockIn(pkg, rule.label, upcoming.delay.toMillis(), upcoming.reason)
-                    } else {
-                        timeLimitScheduler.scheduleBlockIn(pkg, rule.label, limitDelayMs, BlockReason.TIME_LIMIT_REACHED)
-                    }
-                }
-            }
+            serviceScope.launch(Dispatchers.IO) { checkTimeLimit(pkg, rule, strategy, now, bedtime) }
         } else {
             val decision = blockingEngine.decide(rule, now, 0L, bedtime)
             if (decision is BlockDecision.Block) {
                 launchBlockedScreen(pkg, rule.label, decision.reason)
             } else {
-                // Allowed right now — but an allowed-hours window may close, or bedtime start,
-                // while the app is still open. Arm a block for that moment.
+                // Arm a block for when allowed hours end or bedtime starts while the app is open.
                 blockingEngine.nextBlock(rule, now, bedtime)?.let {
                     timeLimitScheduler.scheduleBlockIn(pkg, rule.label, it.delay.toMillis(), it.reason)
                 }
+            }
+        }
+    }
+
+    /** Blocks [pkg] if today's usage is over its limit, otherwise arms the next block. */
+    private suspend fun checkTimeLimit(
+        pkg: String,
+        rule: AppBlockRule,
+        strategy: BlockingStrategy.TimeLimit,
+        now: LocalDateTime,
+        bedtime: TimeWindow?,
+    ) {
+        // Bring recorded usage up to now; the poller only writes every ~15 minutes.
+        runCatching { usageRecorder.recordUpToNow() }.onFailure { Log.w(TAG, "Usage refresh failed", it) }
+        val used = usageRepository.getTodayUsageMinutes(pkg).toLong()
+        val extensionTaken =
+            settingsRepository
+                .hasTakenExtensionToday(pkg, clockProvider.today())
+                .first()
+        val effectiveLimit = strategy.dailyLimitMinutes + if (extensionTaken) ExtensionPolicy.MINUTES else 0
+        val effectiveRule = rule.copy(strategy = BlockingStrategy.TimeLimit(effectiveLimit))
+        val decision = blockingEngine.decide(effectiveRule, now, used, bedtime)
+        // The user may have left the app while usage was loading; its alarm was already
+        // cancelled on that switch, so arming or blocking now would hit the wrong app.
+        if (currentForegroundPkg.get() != pkg) return
+        if (decision is BlockDecision.Block) {
+            launchBlockedScreen(pkg, rule.label, decision.reason)
+        } else {
+            val limitDelayMs = (effectiveLimit.toLong() - used) * MILLIS_PER_MINUTE
+            val upcoming = blockingEngine.nextBlock(rule, now, bedtime)
+            // One alarm per app: arm whichever comes first, the limit or bedtime.
+            if (upcoming != null && upcoming.delay.toMillis() < limitDelayMs) {
+                timeLimitScheduler.scheduleBlockIn(pkg, rule.label, upcoming.delay.toMillis(), upcoming.reason)
+            } else {
+                timeLimitScheduler.scheduleBlockIn(pkg, rule.label, limitDelayMs, BlockReason.TIME_LIMIT_REACHED)
             }
         }
     }
@@ -279,54 +281,19 @@ class FocusGuardAccessibilityService : AccessibilityService() {
     ): ContentFilterEngine.Detection? {
         val filters = activeFiltersCache.get()
         if (filters.isEmpty() || !ContentFilterEngine.isTrackedPackage(pkg)) return null
-        return contentFilterEngine.detect(pkg, className, filters, collectNodeSignals(rootInActiveWindow))
+        return contentFilterEngine.detect(pkg, className, filters, rootInActiveWindow.selectedNodeSignals())
     }
 
-    /**
-     * Walks the visible node tree collecting view-id/content-description text from the
-     * currently *selected* node(s) only — e.g. the active bottom-nav tab. Instagram's "Reels"
-     * tab icon/label is present in the tree on every screen (just unselected), so matching
-     * against every node's text would flag the Reels tab as active from anywhere in the app.
-     * Selection state is the reliable signal for "which tab/surface is actually showing."
-     */
-    private fun collectNodeSignals(root: AccessibilityNodeInfo?): Set<String> {
-        if (root == null) return emptySet()
-        val signals = mutableSetOf<String>()
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
-        var visited = 0
-        while (queue.isNotEmpty() && visited < MAX_NODES_SCANNED) {
-            val node = queue.removeFirst()
-            visited++
-            if (node.isSelected) {
-                node.viewIdResourceName?.let(signals::add)
-                node.contentDescription?.toString()?.let(signals::add)
-            }
-            for (i in 0 until node.childCount) {
-                node.getChild(i)?.let(queue::add)
-            }
-        }
-        return signals
-    }
-
-    /**
-     * Content-filter matches navigate back within the blocked app instead of showing the
-     * full block screen — the goal is to keep the user out of the specific feed (Reels/
-     * Shorts/FYP), not exit the app entirely like a full app block does.
-     */
+    /** Navigates back out of the filtered feed, leaving the rest of the app usable. */
     private fun blockContentFilter(label: String) {
         performGlobalAction(GLOBAL_ACTION_BACK)
         Toast.makeText(applicationContext, "$label is blocked", Toast.LENGTH_SHORT).show()
     }
 
     /**
-     * Scans [pkg] (a known browser) for a blocked domain and, on a match, closes the tab and
-     * redirects it away. Returns true if a block was detected (callers use this to skip
-     * unrelated app-block-rule checks for the same event).
-     *
-     * Two source-independent triggers land here: the AccessibilityEvent path (immediate) and
-     * the UsageStatsManager backup poll (see onServiceConnected) — both funnel through the same
-     * throttle so neither can hammer the node tree.
+     * Checks a known browser's address bar for a blocked domain; on a match closes the tab,
+     * redirects it and shows the block screen. Returns true if blocked. Throttled, since both
+     * accessibility events and the backup poll call it.
      */
     private fun scanForBlockedWebsite(pkg: String): Boolean {
         val rules = webBlockRulesCache.get()
@@ -338,42 +305,26 @@ class FocusGuardAccessibilityService : AccessibilityService() {
 
         val root = rootInActiveWindow ?: return false
         val urlBarResourceId = WebContentFilterEngine.URL_BAR_RESOURCE_IDS[pkg]
-        // While the address bar is being typed into, its text is user input in progress, not
-        // the loaded page — matching against it would block on autocomplete/history text or the
-        // still-focused previous URL before the user can type a replacement, effectively locking
-        // them out of the address bar entirely. Skip scanning until editing ends (field loses
-        // focus, e.g. on submit/navigate), at which point the resulting page load re-triggers a
-        // normal scan against what's actually loaded.
-        if (isEditingAddressBar(root, urlBarResourceId)) return false
-        // For a mapped browser, the resource id not being found means we're not looking at a
-        // normal page at all — the tab switcher, a captcha/permission dialog, settings, history,
-        // etc. all lack the address bar entirely. Treat that as "nothing to detect," not license
-        // to guess from whatever text happens to be on screen (that used to be a substring-match
-        // fallback here and caused real false positives — a tab preview's title, or unrelated
-        // dialog copy, could trip a block on a page the user wasn't even viewing). The heuristic
-        // scan only runs for genuinely unmapped browsers, where it's the only signal available.
+        // While the user is typing, the address bar holds their input, not the loaded page.
+        if (root.hasFocusedInput(urlBarResourceId)) return false
+        // Known browser without its address bar on screen (tab switcher, dialog): nothing to
+        // check. The heuristic scan is only for browsers with no known address-bar id.
         val addressBarText =
             if (urlBarResourceId != null) {
-                findTextByResourceId(root, urlBarResourceId)
+                root.visibleTextOf(urlBarResourceId)
             } else {
-                findHeuristicAddressBarText(root)
+                root.heuristicAddressBarText()
             }
 
         val match = webContentFilterEngine.detect(addressBarText, rules) ?: return false
 
-        // A browser can keep showing the same blocked page across reopens — session/tab
-        // restore, a redirect that didn't fully land before the app backgrounded, etc. — with
-        // no interaction from the user in between. If every one of those detections re-launched
-        // the full-screen overlay, the browser would become unusable: it exits before the user
-        // has any chance to tap the address bar (which is the one thing that pauses scanning,
-        // above) or open a new tab. Retry the tab-close/redirect every time regardless, but only
-        // force the disruptive overlay once per cooldown window per package — that leaves a real
-        // gap where the browser stays on screen (even mid-redirect) long enough to interact with.
+        // The same blocked page can reappear on reopen (tab restore). Always close/redirect it,
+        // but show the block screen at most once per cooldown so the browser stays usable.
         val (lastBlockedPkg, lastBlockedAt) = lastWebBlockAction.get()
         val isRepeatDetection = pkg == lastBlockedPkg && now - lastBlockedAt < WEB_BLOCK_COOLDOWN_MS
         lastWebBlockAction.set(pkg to now)
 
-        closeBrowserTab(root)
+        root.clickCloseTab()
         navigateBrowserAway(pkg)
         if (!isRepeatDetection) {
             launchBlockedScreen(pkg, match.domain, BlockReason.WEBSITE_BLOCKED)
@@ -382,13 +333,8 @@ class FocusGuardAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Redirects the browser's current tab to a neutral page instead of leaving it sitting on
-     * the blocked URL. Without this, reopening the browser lands straight back on the blocked
-     * page — which re-triggers the block immediately, before the user can type a new address or
-     * open a new tab, effectively locking them out of the browser entirely. ACTION_VIEW targeted
-     * at the browser's own package is a universal mechanism every browser handles, unlike
-     * [closeBrowserTab]'s UI-automation approach, which isn't guaranteed to find anything (e.g.
-     * no "close tab" affordance exists at all with only one tab open).
+     * Sends the browser to a neutral page so reopening it doesn't land on the blocked URL. Works
+     * in every browser, unlike [clickCloseTab].
      */
     private fun navigateBrowserAway(pkg: String) {
         val intent =
@@ -397,98 +343,6 @@ class FocusGuardAccessibilityService : AccessibilityService() {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             }
         runCatching { startActivity(intent) }
-    }
-
-    /**
-     * True if the address bar (or any editable field) currently has input focus — i.e. the user
-     * is actively typing rather than viewing a loaded page. [urlBarResourceId] gets a precise
-     * check when known; any focused+editable node elsewhere also counts, since typing anywhere
-     * in the browser chrome (or an unmapped browser's own address field) shouldn't trigger a
-     * block either.
-     */
-    private fun isEditingAddressBar(
-        root: AccessibilityNodeInfo,
-        urlBarResourceId: String?,
-    ): Boolean {
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
-        var visited = 0
-        while (queue.isNotEmpty() && visited < MAX_NODES_SCANNED) {
-            val node = queue.removeFirst()
-            visited++
-            val isUrlBarNode = urlBarResourceId != null && node.viewIdResourceName == urlBarResourceId
-            val isCandidateField = isUrlBarNode || node.isEditable
-            if (node.isVisibleToUser && node.isFocused && isCandidateField) return true
-            for (i in 0 until node.childCount) node.getChild(i)?.let(queue::add)
-        }
-        return false
-    }
-
-    /** Bounded BFS for the text of the first visible node matching [resourceId], or null. */
-    private fun findTextByResourceId(
-        root: AccessibilityNodeInfo,
-        resourceId: String,
-    ): String? {
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
-        var visited = 0
-        while (queue.isNotEmpty() && visited < MAX_NODES_SCANNED) {
-            val node = queue.removeFirst()
-            visited++
-            if (node.isVisibleToUser && node.viewIdResourceName == resourceId) return node.text?.toString()
-            for (i in 0 until node.childCount) node.getChild(i)?.let(queue::add)
-        }
-        return null
-    }
-
-    /**
-     * For browsers not in [WebContentFilterEngine.URL_BAR_RESOURCE_IDS], there's no known
-     * resource id to look up, so this is the only detection signal available at all. Rather than
-     * scanning every visible string (which is what caused the tab-switcher/dialog false
-     * positives for mapped browsers), this only ever returns text from a node that's plausibly
-     * *the address bar itself* — visible, editable-looking, and shaped like a URL per
-     * [WebContentFilterEngine.looksLikeUrl] — never a tab-preview title, dialog copy, or other
-     * incidental on-screen text. Returns null (no detection) if nothing matches that description.
-     */
-    private fun findHeuristicAddressBarText(root: AccessibilityNodeInfo): String? {
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
-        var visited = 0
-        while (queue.isNotEmpty() && visited < MAX_NODES_SCANNED) {
-            val node = queue.removeFirst()
-            visited++
-            val text = node.text?.toString()
-            val looksLikeAddressBar = node.isEditable || node.className?.contains("EditText") == true
-            val isVisibleCandidate = node.isVisibleToUser && looksLikeAddressBar
-            if (isVisibleCandidate && text != null && WebContentFilterEngine.looksLikeUrl(text)) {
-                return text
-            }
-            for (i in 0 until node.childCount) node.getChild(i)?.let(queue::add)
-        }
-        return null
-    }
-
-    /**
-     * Best-effort: finds a clickable "close tab" node and taps it, so the blocked tab isn't
-     * still sitting there when the user returns to the browser after dismissing the overlay.
-     * Browsers vary and this content-description isn't a stable API either — if nothing is
-     * found, this is a no-op; the block overlay is what actually removes the page from view.
-     */
-    private fun closeBrowserTab(root: AccessibilityNodeInfo) {
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
-        var visited = 0
-        while (queue.isNotEmpty() && visited < MAX_NODES_SCANNED) {
-            val node = queue.removeFirst()
-            visited++
-            val description = node.contentDescription?.toString()
-            val isCloseTabCandidate = node.isVisibleToUser && node.isClickable
-            if (isCloseTabCandidate && description != null && description.contains("close tab", ignoreCase = true)) {
-                node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                return
-            }
-            for (i in 0 until node.childCount) node.getChild(i)?.let(queue::add)
-        }
     }
 
     override fun onInterrupt() = Unit
@@ -522,7 +376,6 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         const val EXTRA_BLOCKED_PACKAGE = "extra_blocked_package"
         const val EXTRA_BLOCKED_LABEL = "extra_blocked_label"
         const val EXTRA_BLOCK_REASON = "extra_block_reason"
-        private const val MAX_NODES_SCANNED = 300
         private const val WEB_SCAN_THROTTLE_MS = 300L
         private const val WEB_BLOCK_COOLDOWN_MS = 15_000L
         private const val USAGE_STATS_POLL_INTERVAL_MS = 2_000L

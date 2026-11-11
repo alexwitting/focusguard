@@ -27,8 +27,7 @@ class MidnightResetWorker
     ) : CoroutineWorker(context, params) {
         override suspend fun doWork(): Result {
             UsagePollerWorker.notified80Packages.clear()
-            // Keep the database from growing forever. A failure here mustn't stop the nightly
-            // chain from rescheduling itself, so it's logged and retried tomorrow.
+            // Logged rather than failed, so tonight's reschedule still happens.
             runCatching { usageRepository.pruneBefore(clockProvider.today().minusDays(UsageRetention.DAYS)) }
                 .onFailure { Log.e(TAG, "Pruning old usage history failed", it) }
             scheduleNext(applicationContext)

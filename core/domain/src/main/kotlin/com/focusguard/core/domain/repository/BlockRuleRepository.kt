@@ -7,8 +7,6 @@ import kotlinx.coroutines.flow.Flow
 interface BlockRuleRepository {
     fun getAppBlockRules(): Flow<List<AppBlockRule>>
 
-    fun getAppBlockRule(packageName: String): Flow<AppBlockRule?>
-
     fun getAllAppsWithRules(): Flow<List<AppWithRule>>
 
     suspend fun upsertAppBlockRule(rule: AppBlockRule)

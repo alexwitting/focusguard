@@ -50,7 +50,7 @@ class DnsVpnService : android.net.VpnService() {
     private val rulesCache = AtomicReference<List<WebBlockRule>>(emptyList())
     private var tunInterface: ParcelFileDescriptor? = null
 
-    /** Everything one running tunnel owns, so stopping it doesn't kill the whole service scope. */
+    /** Owns one running tunnel's coroutines, so stopping it leaves the service scope intact. */
     private var sessionJob: Job? = null
 
     /** Caps in-flight upstream lookups; each can wait up to the socket timeout. */
@@ -83,18 +83,13 @@ class DnsVpnService : android.net.VpnService() {
     }
 
     private fun startVpn() {
-        // onStartCommand runs again for every start request (Settings' "Start" while already
-        // running, a sticky restart). Establishing a second tunnel here used to leak the first
-        // one and leave two read loops competing for packets.
+        // Already running: start requests arrive again for Settings' "Start" and sticky restarts.
         if (tunInterface != null) return
 
         startForeground(NOTIFICATION_ID, buildNotification())
 
-        // establish() can throw (e.g. SecurityException under another app's always-on/lockdown
-        // VPN, or if consent is revoked between VpnService.prepare() and this call) as well as
-        // return null on failure. startForeground() above has already posted the notification,
-        // so an uncaught exception here would crash the service mid-start, leaving a misleading
-        // "active" notification behind. Treat a thrown exception the same as a null result.
+        // establish() can throw (another app's always-on VPN, consent revoked) or return null;
+        // treat both as failure.
         val pfd =
             runCatching {
                 Builder()
@@ -102,8 +97,7 @@ class DnsVpnService : android.net.VpnService() {
                     .addDnsServer(DNS_INTERCEPT)
                     .addRoute(DNS_INTERCEPT, 32)
                     .setMtu(1500)
-                    // Blocking reads: the loop sleeps in read() until a packet arrives, instead
-                    // of polling a non-blocking fd every few milliseconds all day.
+                    // Blocking reads: the loop sleeps until a packet arrives.
                     .setBlocking(true)
                     .setSession("FocusGuard")
                     .establish()
@@ -142,9 +136,8 @@ class DnsVpnService : android.net.VpnService() {
     }
 
     /**
-     * Reads packets until the tunnel closes. Each DNS query is answered on its own coroutine:
-     * forwarding can wait up to the upstream timeout, and handling them one at a time meant a
-     * single slow lookup stalled every other page load behind it.
+     * Reads packets until the tunnel closes. Each query is answered on its own coroutine so a
+     * slow upstream lookup doesn't hold up the others.
      */
     private suspend fun runDnsLoop(
         pfd: ParcelFileDescriptor,
@@ -159,11 +152,12 @@ class DnsVpnService : android.net.VpnService() {
                 try {
                     inStream.read(buffer)
                 } catch (e: IOException) {
-                    // The tunnel was closed (stopVpn / onRevoke) — normal shutdown.
+                    // Tunnel closed by stopVpn or onRevoke.
                     Log.d(TAG, "Tunnel read ended", e)
                     return
                 }
-            if (len <= 0) continue
+            if (len < 0) return // end of stream: the tunnel is gone
+            if (len == 0) continue
 
             val packet = buffer.copyOf(len)
             inFlightQueries.acquire()
@@ -184,11 +178,7 @@ class DnsVpnService : android.net.VpnService() {
         if (!isUdp) return null
 
         val ihl = (packet[0].toInt() and 0x0F) * 4
-        // IHL can exceed the minimum 20-byte header when IP options are present — without this
-        // check a header that long crosses the 28-byte floor validated above, and the field
-        // reads below throw ArrayIndexOutOfBoundsException. That's uncaught here (it's before
-        // runCatching), which silently kills the runDnsLoop coroutine and stops DNS forwarding
-        // until the VPN service is restarted.
+        // IP options can make the header longer than the 28-byte minimum checked above.
         if (packet.size < ihl + 8) return null
         val dstPort = ((packet[ihl + 2].toInt() and 0xFF) shl 8) or (packet[ihl + 3].toInt() and 0xFF)
         if (dstPort != 53) return null
@@ -225,7 +215,12 @@ class DnsVpnService : android.net.VpnService() {
         queryPacket: ByteArray,
         ihl: Int,
         dnsPayload: ByteArray,
-    ): ByteArray? =
+    ): ByteArray? = upstream(dnsPayload)?.let { wrapInUdpIp(queryPacket, ihl, it) }
+
+    /** Sends a DNS query to the upstream resolver and returns its reply, or null on failure. */
+    internal var upstream: suspend (ByteArray) -> ByteArray? = ::queryUpstream
+
+    private suspend fun queryUpstream(dnsPayload: ByteArray): ByteArray? =
         withContext(Dispatchers.IO) {
             runCatching {
                 DatagramSocket().use { socket ->
@@ -236,7 +231,7 @@ class DnsVpnService : android.net.VpnService() {
                     val buf = ByteArray(4096)
                     val resp = DatagramPacket(buf, buf.size)
                     socket.receive(resp)
-                    wrapInUdpIp(queryPacket, ihl, resp.data.copyOf(resp.length))
+                    resp.data.copyOf(resp.length)
                 }
             }.getOrNull()
         }
@@ -295,7 +290,7 @@ class DnsVpnService : android.net.VpnService() {
         val channelId = "focusguard_vpn"
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
             .createNotificationChannel(
-                NotificationChannel(channelId, "Website Blocking", NotificationManager.IMPORTANCE_LOW),
+                NotificationChannel(channelId, "Website blocking", NotificationManager.IMPORTANCE_LOW),
             )
         return Notification
             .Builder(this, channelId)

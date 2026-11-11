@@ -11,9 +11,6 @@ interface AppBlockRuleDao {
     @Query("SELECT * FROM app_block_rules ORDER BY label ASC")
     fun getAll(): Flow<List<AppBlockRuleEntity>>
 
-    @Query("SELECT * FROM app_block_rules WHERE packageName = :packageName")
-    fun getByPackageName(packageName: String): Flow<AppBlockRuleEntity?>
-
     @Upsert
     suspend fun upsert(entity: AppBlockRuleEntity)
 

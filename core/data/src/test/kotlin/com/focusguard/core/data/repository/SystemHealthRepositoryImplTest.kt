@@ -26,13 +26,8 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
 /**
- * `Build.VERSION.SDK_INT` reads as 0 under a plain JVM unit test, so the
- * `exactAlarmAllowed` branch in [SystemHealthRepositoryImpl] always takes the
- * pre-S `true` path here — no AlarmManager mocking is needed.
- *
- * VPN-active detection is a synchronous point-in-time scan of `ConnectivityManager.allNetworks`
- * (see that method's doc comment for why), not event-driven — tests stub
- * `allNetworks`/`getNetworkCapabilities` directly rather than capturing and invoking a callback.
+ * `Build.VERSION.SDK_INT` is 0 in plain JVM tests, so exact alarms always read as allowed.
+ * VPN detection scans `allNetworks`, which the tests stub directly.
  */
 @Suppress("DEPRECATION")
 class SystemHealthRepositoryImplTest {
@@ -135,8 +130,7 @@ class SystemHealthRepositoryImplTest {
     @Test
     fun `checkSystemHealthNow reports active when a VPN tunnel was already established before this call`() =
         runTest {
-            // This repository instance never registered any callback for this network — it
-            // detects the active VPN purely through the point-in-time scan.
+            // Detected by scanning current networks; no callback involved.
             every { accessibilityManager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK) } returns
                 emptyList()
             every { connectivityManager.allNetworks } returns
@@ -206,9 +200,7 @@ class SystemHealthRepositoryImplTest {
     @Test
     fun `observeSystemHealth survives a transient failure and resumes emitting on the next poll`() =
         runTest {
-            // A raw `while (true) { emit(check()) }` would let this first-call exception end the
-            // flow forever — first() only completes here because the per-iteration runCatching
-            // lets the loop retry on the next tick instead of propagating out of the flow builder.
+            // The first check throws; the poll catches it and emits on the next tick.
             every { accessibilityManager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK) } throws
                 RuntimeException("transient") andThen listOf(enabledAccessibilityService())
 

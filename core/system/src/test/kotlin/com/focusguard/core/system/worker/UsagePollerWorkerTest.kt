@@ -6,9 +6,11 @@ import android.app.usage.UsageStatsManager
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.ListenableWorker
+import androidx.work.WorkManager
 import androidx.work.WorkerFactory
 import androidx.work.WorkerParameters
 import androidx.work.testing.TestListenableWorkerBuilder
+import androidx.work.testing.WorkManagerTestInitHelper
 import com.focusguard.core.domain.model.AppBlockRule
 import com.focusguard.core.domain.model.BlockingStrategy
 import com.focusguard.core.system.engine.UsageSessionEngine
@@ -28,6 +30,8 @@ import org.junit.jupiter.api.extension.ExtendWith
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.shadows.ShadowUsageStatsManager
 import tech.apter.junit.jupiter.robolectric.RobolectricExtension
+import java.time.LocalDateTime
+import java.util.concurrent.TimeUnit
 
 /**
  * UsageStatsManager/UsageEvents have no public constructor and can't be meaningfully mocked —
@@ -38,6 +42,9 @@ class UsagePollerWorkerTest {
     private val usageRepository = FakeUsageRepository()
     private val blockRuleRepository = FakeBlockRuleRepository()
     private val usageSessionEngine = UsageSessionEngine()
+
+    // Noon, so sessions a few minutes either side of "now" never cross midnight.
+    private val clock = FakeClockProvider().apply { setNow(LocalDateTime.of(2026, 3, 10, 12, 0)) }
     private lateinit var context: Context
 
     @BeforeEach
@@ -65,7 +72,7 @@ class UsagePollerWorkerTest {
                             usageRepository,
                             blockRuleRepository,
                             usageSessionEngine,
-                            UsageRecorder(appContext, usageRepository, usageSessionEngine, FakeClockProvider()),
+                            UsageRecorder(appContext, usageRepository, usageSessionEngine, clock),
                             AccessibilityWatchdog(appContext, FakeSettingsRepository()),
                         )
                 },
@@ -90,9 +97,7 @@ class UsagePollerWorkerTest {
     @Test
     fun `doWork records a completed session from a resume-then-pause pair`() =
         runTest {
-            // doWork() queries the [now - 15min, now] window against real wall-clock time, so
-            // events need timestamps relative to now — not small epoch-relative values.
-            val now = System.currentTimeMillis()
+            val now = clock.epochMillis()
             addEvent("com.app", UsageEvents.Event.ACTIVITY_RESUMED, now - 60_000)
             addEvent("com.app", UsageEvents.Event.ACTIVITY_PAUSED, now - 1_000)
 
@@ -134,9 +139,29 @@ class UsagePollerWorkerTest {
         }
 
     @Test
+    fun `doWork does not warn for a disabled time-limit rule`() =
+        runTest {
+            blockRuleRepository.setRules(
+                AppBlockRule(
+                    packageName = "com.app",
+                    label = "App",
+                    strategy = BlockingStrategy.TimeLimit(dailyLimitMinutes = 60),
+                    enabled = false,
+                ),
+            )
+            usageRepository.setTodayUsageMinutes("com.app", 50)
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+            buildWorker().doWork()
+
+            assertTrue(shadowOf(notificationManager).allNotifications.isEmpty())
+            assertTrue("com.app" !in UsagePollerWorker.notified80Packages)
+        }
+
+    @Test
     fun `doWork ignores event types other than resumed and paused`() =
         runTest {
-            val now = System.currentTimeMillis()
+            val now = clock.epochMillis()
             addEvent("com.app", UsageEvents.Event.NONE, now - 1_000)
 
             val result = buildWorker().doWork()
@@ -162,11 +187,7 @@ class UsagePollerWorkerTest {
     @Test
     fun `doWork closes a still-open session at the query window end when there's no matching pause yet`() =
         runTest {
-            // UsageSessionEngine.pairSessions() documents this: a package still resumed with no
-            // matching PAUSED event gets one session closed at windowEnd rather than dropped, so
-            // pairs.isEmpty() never actually happens for a package that appears in the raw events
-            // at all — every sessionPairs entry is built via getOrPut{}.add(), always non-empty.
-            val now = System.currentTimeMillis()
+            val now = clock.epochMillis()
             addEvent("com.app", UsageEvents.Event.ACTIVITY_RESUMED, now - 1_000)
 
             val result = buildWorker().doWork()
@@ -178,10 +199,8 @@ class UsagePollerWorkerTest {
     @Test
     fun `doWork uses a persisted checkpoint older than the fixed window to catch up after a delayed run`() =
         runTest {
-            val now = System.currentTimeMillis()
-            // 20 minutes ago is outside a fixed 15-minute window, but inside the window a
-            // persisted checkpoint from 30 minutes ago opens up — proves the checkpoint, not a
-            // fixed window, determines where a run actually starts reading from.
+            val now = clock.epochMillis()
+            // 20 minutes ago is outside the first-run window but inside the saved checkpoint's.
             context
                 .getSharedPreferences("focusguard_usage_poller_state", Context.MODE_PRIVATE)
                 .edit()
@@ -199,7 +218,7 @@ class UsagePollerWorkerTest {
     @Test
     fun `doWork buckets sessions spanning multiple calendar days by each session's own start-time date`() =
         runTest {
-            val now = System.currentTimeMillis()
+            val now = clock.epochMillis()
             val yesterday = now - 25 * 60 * 60_000 // guarantees a different calendar date
             context
                 .getSharedPreferences("focusguard_usage_poller_state", Context.MODE_PRIVATE)
@@ -222,7 +241,7 @@ class UsagePollerWorkerTest {
     @Test
     fun `doWork keeps counting an app that stays open across polls`() =
         runTest {
-            val now = System.currentTimeMillis()
+            val now = clock.epochMillis()
             val prefs = context.getSharedPreferences("focusguard_usage_poller_state", Context.MODE_PRIVATE)
             // Last poll ended 10 minutes ago with com.app still in the foreground, and nothing
             // has happened since — the app is still open now.
@@ -249,7 +268,7 @@ class UsagePollerWorkerTest {
     @Test
     fun `doWork persists the window end as the checkpoint for the next run`() =
         runTest {
-            val now = System.currentTimeMillis()
+            val now = clock.epochMillis()
             addEvent("com.app", UsageEvents.Event.ACTIVITY_RESUMED, now - 60_000)
             addEvent("com.app", UsageEvents.Event.ACTIVITY_PAUSED, now - 1_000)
 
@@ -264,9 +283,7 @@ class UsagePollerWorkerTest {
 
     @Test
     fun `notified80Packages survives concurrent adds racing a clear without throwing`() {
-        // UsagePollerWorker and MidnightResetWorker are separate WorkManager unique work items
-        // that can run on different executor threads concurrently — this simulates that race
-        // directly against the shared companion-object set rather than through two workers.
+        // The poller and the midnight worker can run at the same time on different threads.
         val adder =
             Thread {
                 repeat(500) { i -> UsagePollerWorker.notified80Packages.add("com.app$i") }
@@ -281,9 +298,19 @@ class UsagePollerWorkerTest {
         adder.join()
         clearer.join()
 
-        // The interleaving is non-deterministic, but reaching this line without a
-        // ConcurrentModificationException is the actual thing under test; the size bound just
-        // confirms the set wasn't corrupted into holding more than the 500 possible entries.
+        // Passes if no ConcurrentModificationException is thrown and the set stays bounded.
         assertTrue(UsagePollerWorker.notified80Packages.size <= 500)
+    }
+
+    @Test
+    fun `scheduling twice leaves a single 15-minute poller`() {
+        WorkManagerTestInitHelper.initializeTestWorkManager(context)
+
+        UsagePollerWorker.schedule(context)
+        UsagePollerWorker.schedule(context)
+
+        val work = WorkManager.getInstance(context).getWorkInfosForUniqueWork("focusguard_usage_poller").get()
+        assertEquals(1, work.size)
+        assertEquals(TimeUnit.MINUTES.toMillis(15), work.single().periodicityInfo?.repeatIntervalMillis)
     }
 }

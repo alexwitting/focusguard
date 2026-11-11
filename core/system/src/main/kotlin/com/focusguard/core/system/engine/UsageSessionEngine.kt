@@ -3,10 +3,7 @@ package com.focusguard.core.system.engine
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * Pure Kotlin — no Android imports. Pairs raw foreground/background events into usage
- * sessions and decides when a time-limit warning notification should fire.
- */
+/** Turns usage events into sessions and decides when to send the 80% time-limit warning. */
 @Singleton
 class UsageSessionEngine
     @Inject
@@ -26,9 +23,8 @@ class UsageSessionEngine
         )
 
         /**
-         * [sessions]: `(start, end)` windows per package. [stillOpen]: packages still in the
-         * foreground at the window end — pass them back as `openAtStart` on the next poll so a
-         * session that spans several polls keeps being counted.
+         * [sessions]: `(start, end)` per package. [stillOpen]: packages still in the foreground at
+         * the window end; pass them as `openAtStart` to the next call.
          */
         data class SessionResult(
             val sessions: Map<String, List<Pair<Long, Long>>>,
@@ -36,23 +32,12 @@ class UsageSessionEngine
         )
 
         /**
-         * Pairs [events] into usage sessions per package for the poll window
-         * `[windowStart, windowEnd]`.
-         *
-         * Usage is polled in ~15-minute windows, but a session can span many of them (a 40-minute
-         * video). Only pairing RESUMED→PAUSED *within* one window used to drop everything after
-         * the first poll: the middle windows had no events at all, and the final PAUSED had no
-         * matching RESUMED. So:
-         * - [openAtStart] packages (the previous window's [SessionResult.stillOpen]) are treated
-         *   as resumed at [windowStart];
-         * - a PAUSED for a package with no earlier event in this window means it was open before
-         *   the window started, so it counts from [windowStart] (when known);
-         * - an app's activities are reference-counted, so switching activities inside one app
-         *   (A resumes B before A pauses, or multi-window) neither ends nor double-counts it;
-         * - [EventType.SCREEN_OFF] closes everything, so a missed PAUSED can't leave an app
-         *   "open" across the night.
-         *
-         * [selfPackage] is excluded so FocusGuard's own foreground time is never counted.
+         * Pairs [events] into sessions for the window `[windowStart, windowEnd]`:
+         * - [openAtStart] packages count as resumed at [windowStart];
+         * - a PAUSED with no earlier event for that package counts from [windowStart];
+         * - activities are reference-counted, so moving between an app's own screens is one session;
+         * - [EventType.SCREEN_OFF] closes every open session.
+         * [selfPackage] is never counted.
          */
         fun pairSessions(
             events: List<UsageEvent>,
@@ -114,8 +99,7 @@ class UsageSessionEngine
                 when {
                     count > 1 -> openCount[pkg] = count - 1
                     count == 1 -> close(pkg, at)
-                    // First sign of this app in the window is a pause: it was open before the
-                    // window started.
+                    // Paused before any resume in this window: it was open at the window start.
                     pkg !in seen && windowStart != null -> {
                         openSince[pkg] = windowStart
                         close(pkg, at)
@@ -138,11 +122,7 @@ class UsageSessionEngine
             }
         }
 
-        /**
-         * Whether a time-limit warning should fire: usage has crossed 80% of [limitMinutes]
-         * but not yet reached 100% (a full block is handled elsewhere), and this package
-         * hasn't already been warned today ([alreadyNotified]).
-         */
+        /** True once usage is at 80–99% of [limitMinutes] and no warning has been sent today. */
         fun shouldWarn(
             usedMinutes: Long,
             limitMinutes: Long,

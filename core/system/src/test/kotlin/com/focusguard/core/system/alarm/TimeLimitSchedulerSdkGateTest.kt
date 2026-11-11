@@ -13,12 +13,8 @@ import org.robolectric.shadows.ShadowAlarmManager
 import tech.apter.junit.jupiter.robolectric.RobolectricExtension
 
 /**
- * `TimeLimitSchedulerTest` covers `scheduleBlock`'s behavior under a plain JVM test, where
- * `Build.VERSION.SDK_INT` reads 0 and the `SDK_INT >= S && !canScheduleExactAlarms()` branch is
- * unreachable — only `setExactAndAllowWhileIdle` fires there. This is a separate, minimal
- * Robolectric-based class (rather than converting the whole existing file) specifically to reach
- * the "inexact" `setAndAllowWhileIdle` path, which needs a real `Build.VERSION_CODES.S`+ SDK level
- * and `ShadowAlarmManager.setCanScheduleExactAlarms(false)`.
+ * Covers the inexact-alarm path, which needs Android 12+ with exact alarms denied, so it runs
+ * under Robolectric. TimeLimitSchedulerTest covers the rest as a plain JVM test.
  */
 @ExtendWith(RobolectricExtension::class)
 @Config(sdk = [31])

@@ -30,11 +30,11 @@ dependencies {
     testImplementation(libs.turbine)
 }
 
-// Regression gate, not a target — see :core:domain's build.gradle.kts for why.
+// Fails CI below 90% line coverage.
 kover {
     reports {
         verify {
-            rule { minBound(75) }
+            rule { minBound(90) }
         }
     }
 }

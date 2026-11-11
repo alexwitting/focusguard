@@ -20,13 +20,13 @@ Block distracting apps, filter websites and short-form content, enforce daily ti
 ## Features
 
 - **App blocking** — block any installed app on a schedule or always
-- **Website filtering** — block domains via a local VPN DNS filter (no root required)
+- **Website filtering** — block domains by scanning the browser's address bar, or with an optional VPN DNS filter (no root required)
 - **Content filtering** — suppress Reels, Shorts, and TikTok FYP feeds
 - **Time limits** — enforce a daily usage cap per app; the app locks when the limit is reached
 - **Bedtime mode** — automatically block during configurable hours
 - **PIN protection** — gate all rule changes behind a 6-digit PIN
 - **Usage dashboard** — weekly bar chart and per-app breakdown
-- **Fully offline** — no account, no analytics, no cloud sync
+- **No account or cloud** — no analytics or cloud sync; usage data and rules stay on the phone. With the optional VPN on, lookups for sites that aren't blocked are sent to Cloudflare's DNS (1.1.1.1)
 
 ## Requirements
 

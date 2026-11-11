@@ -191,9 +191,8 @@ private fun ProtectionPill(
 }
 
 /**
- * Shown while the accessibility service is off — then nothing is being blocked, and
- * reinstalling the app silently turns it off, so this stays visible (not a dismissible
- * Snackbar) until it's back on. The optional VPN never triggers it.
+ * Shown while the accessibility service is off, since nothing is blocked then. Stays until it's
+ * back on. The optional VPN never triggers it.
  */
 @Composable
 private fun ServiceWarningCard(onFix: () -> Unit) {
