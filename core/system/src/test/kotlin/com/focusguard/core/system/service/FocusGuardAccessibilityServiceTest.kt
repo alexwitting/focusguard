@@ -71,7 +71,8 @@ class FocusGuardAccessibilityServiceTest : AccessibilityServiceTestBase() {
 
     @Test
     fun `allows a ScheduledBlock app inside its allowed window`() {
-        val now = java.time.LocalDateTime.now()
+        val now = LocalDateTime.of(2026, 3, 10, 12, 0)
+        clockProvider.setNow(now)
         val window = TimeWindow(0, 0, 23, 59, setOf(now.dayOfWeek))
         blockRuleRepository.setRules(
             AppBlockRule(packageName = OTHER_APP, label = "Other", strategy = BlockingStrategy.ScheduledBlock(listOf(window))),

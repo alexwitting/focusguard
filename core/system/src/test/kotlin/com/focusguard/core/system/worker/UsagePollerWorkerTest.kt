@@ -30,6 +30,7 @@ import org.junit.jupiter.api.extension.ExtendWith
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.shadows.ShadowUsageStatsManager
 import tech.apter.junit.jupiter.robolectric.RobolectricExtension
+import java.time.LocalDateTime
 import java.util.concurrent.TimeUnit
 
 /**
@@ -41,6 +42,9 @@ class UsagePollerWorkerTest {
     private val usageRepository = FakeUsageRepository()
     private val blockRuleRepository = FakeBlockRuleRepository()
     private val usageSessionEngine = UsageSessionEngine()
+
+    // Noon, so sessions a few minutes either side of "now" never cross midnight.
+    private val clock = FakeClockProvider().apply { setNow(LocalDateTime.of(2026, 3, 10, 12, 0)) }
     private lateinit var context: Context
 
     @BeforeEach
@@ -68,7 +72,7 @@ class UsagePollerWorkerTest {
                             usageRepository,
                             blockRuleRepository,
                             usageSessionEngine,
-                            UsageRecorder(appContext, usageRepository, usageSessionEngine, FakeClockProvider()),
+                            UsageRecorder(appContext, usageRepository, usageSessionEngine, clock),
                             AccessibilityWatchdog(appContext, FakeSettingsRepository()),
                         )
                 },
@@ -93,8 +97,7 @@ class UsagePollerWorkerTest {
     @Test
     fun `doWork records a completed session from a resume-then-pause pair`() =
         runTest {
-            // doWork() reads up to the real current time, so events are timed relative to now.
-            val now = System.currentTimeMillis()
+            val now = clock.epochMillis()
             addEvent("com.app", UsageEvents.Event.ACTIVITY_RESUMED, now - 60_000)
             addEvent("com.app", UsageEvents.Event.ACTIVITY_PAUSED, now - 1_000)
 
@@ -158,7 +161,7 @@ class UsagePollerWorkerTest {
     @Test
     fun `doWork ignores event types other than resumed and paused`() =
         runTest {
-            val now = System.currentTimeMillis()
+            val now = clock.epochMillis()
             addEvent("com.app", UsageEvents.Event.NONE, now - 1_000)
 
             val result = buildWorker().doWork()
@@ -184,7 +187,7 @@ class UsagePollerWorkerTest {
     @Test
     fun `doWork closes a still-open session at the query window end when there's no matching pause yet`() =
         runTest {
-            val now = System.currentTimeMillis()
+            val now = clock.epochMillis()
             addEvent("com.app", UsageEvents.Event.ACTIVITY_RESUMED, now - 1_000)
 
             val result = buildWorker().doWork()
@@ -196,7 +199,7 @@ class UsagePollerWorkerTest {
     @Test
     fun `doWork uses a persisted checkpoint older than the fixed window to catch up after a delayed run`() =
         runTest {
-            val now = System.currentTimeMillis()
+            val now = clock.epochMillis()
             // 20 minutes ago is outside the first-run window but inside the saved checkpoint's.
             context
                 .getSharedPreferences("focusguard_usage_poller_state", Context.MODE_PRIVATE)
@@ -215,7 +218,7 @@ class UsagePollerWorkerTest {
     @Test
     fun `doWork buckets sessions spanning multiple calendar days by each session's own start-time date`() =
         runTest {
-            val now = System.currentTimeMillis()
+            val now = clock.epochMillis()
             val yesterday = now - 25 * 60 * 60_000 // guarantees a different calendar date
             context
                 .getSharedPreferences("focusguard_usage_poller_state", Context.MODE_PRIVATE)
@@ -238,7 +241,7 @@ class UsagePollerWorkerTest {
     @Test
     fun `doWork keeps counting an app that stays open across polls`() =
         runTest {
-            val now = System.currentTimeMillis()
+            val now = clock.epochMillis()
             val prefs = context.getSharedPreferences("focusguard_usage_poller_state", Context.MODE_PRIVATE)
             // Last poll ended 10 minutes ago with com.app still in the foreground, and nothing
             // has happened since — the app is still open now.
@@ -265,7 +268,7 @@ class UsagePollerWorkerTest {
     @Test
     fun `doWork persists the window end as the checkpoint for the next run`() =
         runTest {
-            val now = System.currentTimeMillis()
+            val now = clock.epochMillis()
             addEvent("com.app", UsageEvents.Event.ACTIVITY_RESUMED, now - 60_000)
             addEvent("com.app", UsageEvents.Event.ACTIVITY_PAUSED, now - 1_000)
 

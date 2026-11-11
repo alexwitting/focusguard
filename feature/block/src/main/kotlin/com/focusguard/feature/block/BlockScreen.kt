@@ -690,13 +690,6 @@ private fun ContentTab(
         contentPadding = PaddingValues(start = ScreenGutter, end = ScreenGutter, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        item {
-            Text(
-                "Only the feed is blocked. The rest of each app still works.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
         items(CONTENT_FILTERS.size) { index ->
             val info = CONTENT_FILTERS[index]
             val checked = info.filter in activeFilters
